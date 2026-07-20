@@ -1,4 +1,68 @@
-use crate::backend::WindowInfo;
+use crate::backend::{WindowBackend, WindowInfo};
+use crate::timeout::{run_with_timeout, TimeoutError};
+use std::time::Duration;
+use zbus::blocking::Connection;
+
+const DEST: &str = "org.gnome.Shell";
+const PATH: &str = "/org/gnome/Shell/Extensions/Windows";
+const IFACE: &str = "org.gnome.Shell.Extensions.Windows";
+const CALL_TIMEOUT: Duration = Duration::from_secs(3);
+
+pub struct GnomeBackend {
+    conn: Connection,
+}
+
+impl GnomeBackend {
+    pub fn connect() -> anyhow::Result<Self> {
+        Ok(Self {
+            conn: Connection::session()?,
+        })
+    }
+}
+
+fn call_with_timeout<T: Send + 'static>(
+    context: &'static str,
+    f: impl FnOnce() -> zbus::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    match run_with_timeout(CALL_TIMEOUT, f) {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(e)) => anyhow::bail!(
+            "{context}: {e} (is the \"Window Calls\" GNOME Shell extension installed \
+             and enabled? https://extensions.gnome.org/extension/4724/window-calls/)"
+        ),
+        Err(TimeoutError::Elapsed) => anyhow::bail!("GNOME Shell is not responding"),
+        Err(TimeoutError::WorkerPanicked) => {
+            anyhow::bail!("GNOME worker thread panicked or exited unexpectedly")
+        }
+    }
+}
+
+impl WindowBackend for GnomeBackend {
+    fn list_windows(&self, query: &str) -> anyhow::Result<Vec<WindowInfo>> {
+        let conn = self.conn.clone();
+        let reply = call_with_timeout("GNOME List call failed", move || {
+            conn.call_method(Some(DEST), PATH, Some(IFACE), "List", &())
+        })?;
+        let json: String = reply.body().deserialize()?;
+        let windows: Vec<GnomeWindow> = serde_json::from_str(&json)?;
+        Ok(windows
+            .into_iter()
+            .filter(|w| matches_query(w, query))
+            .map(window_info_from_gnome_window)
+            .collect())
+    }
+
+    fn activate(&self, id: &str) -> anyhow::Result<()> {
+        let winid: u32 = id
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid GNOME window id: {id:?}"))?;
+        let conn = self.conn.clone();
+        call_with_timeout("GNOME Activate call failed", move || {
+            conn.call_method(Some(DEST), PATH, Some(IFACE), "Activate", &(winid,))
+        })?;
+        Ok(())
+    }
+}
 
 #[derive(serde::Deserialize)]
 struct GnomeWindow {
