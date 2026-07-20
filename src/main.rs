@@ -18,6 +18,17 @@ enum Command {
     Switch { query: String },
     /// List windows matching QUERY (all windows if omitted).
     List { query: Option<String> },
+    /// Send a notification; clicking it activates the window matching QUERY.
+    Notify {
+        #[arg(long)]
+        query: String,
+        #[arg(long)]
+        summary: String,
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long)]
+        icon: Option<String>,
+    },
 }
 
 fn main() -> std::process::ExitCode {
@@ -25,6 +36,9 @@ fn main() -> std::process::ExitCode {
     let result = match cli.command {
         Command::Switch { query } => commands::run_switch(&query),
         Command::List { query } => commands::run_list(query.as_deref()),
+        Command::Notify { query, summary, body, icon } => {
+            commands::run_notify(&query, &summary, body.as_deref(), icon.as_deref())
+        }
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
