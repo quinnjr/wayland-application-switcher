@@ -2,11 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build `was`, a CLI tool that lists/activates KWin windows over D-Bus, with a picker GUI for ambiguous matches and a `notify` subcommand that raises a window when its own notification is clicked.
+**Goal:** Build `was`, a CLI tool that lists/activates KWin windows over D-Bus, with a picker TUI for ambiguous `switch`/`list` matches and a `notify` subcommand that raises a window when its own notification is clicked.
 
-**Architecture:** A `WindowBackend` trait abstracts window listing/activation; `KWinBackend` implements it over `org.kde.KWin` `/WindowsRunner`'s `org.kde.krunner1` D-Bus interface (`Match`/`Run`). A pure `resolve()` function (0/1/many-match branching) is shared by `switch` and post-click `notify` activation, and is unit-tested against a fake backend and fake picker — no D-Bus or GUI needed for that logic. `KWinBackend` and the `eframe` picker are verified manually against the live KDE session, since there's no way to unit-test real D-Bus/GUI interaction.
+**Architecture:** A `WindowBackend` trait abstracts window listing/activation; `KWinBackend` implements it over `org.kde.KWin` `/WindowsRunner`'s `org.kde.krunner1` D-Bus interface (`Match`/`Run`). A pure `resolve()` function (0/1/many-match branching) is shared by `switch` and the picker; `notify` does *not* use `resolve()` or the picker — on ambiguous match it reports candidates and exits without activating anything, since a notification click has no terminal to render a picker into. `resolve()` is unit-tested against a fake backend and fake picker; the picker's own interaction logic (selection/activate/cancel) is unit-tested headlessly via `ntui::testing::TestTerminal`. `KWinBackend` is verified manually against the live KDE session, since there's no way to unit-test real D-Bus interaction.
 
-**Tech Stack:** Rust 2024 edition, `clap` (derive) for CLI, `zbus` (`blocking` feature only, no async runtime) for D-Bus, `eframe`/`egui` for the picker GUI, `anyhow` for error handling.
+**Tech Stack:** Rust 2024 edition, `clap` (derive) for CLI, `zbus` (`async-io` feature, pulling in `blocking`) for D-Bus, `ntui` (Ink-style TUI, hooks-based) for the picker, `tokio` (`rt`, `macros`) as the runtime `ntui` needs, `anyhow` for error handling.
+
+> **Note:** Task 1 below still shows the plan's original `eframe`/`egui` dependency choice — that was superseded by `ntui` partway through implementation (see Task 4, rewritten below to match what was actually built) after the user asked for a TUI instead of a GUI. `notify`'s ambiguous-match handling (Task 7) was correspondingly changed to report-and-skip rather than open a picker, since a notification click has no terminal to render one into.
 
 ## Global Constraints
 
@@ -429,139 +431,242 @@ git commit -m "Add KWinBackend over org.kde.krunner1 WindowsRunner"
 
 ---
 
-## Task 4: GuiPicker (eframe/egui)
+## Task 4: TuiPicker (ntui) — as actually implemented
+
+> Superseded from an original `eframe`/`egui` GUI design to an `ntui` TUI at
+> the user's explicit request, mid-implementation. This section reflects
+> what was actually built and committed (commit: "Add TuiPicker using ntui,
+> with headless TestTerminal interaction tests").
 
 **Files:**
-- Modify: `src/picker.rs` (add `GuiPicker` alongside the existing `Picker` trait)
+- Modify: `src/picker.rs` (add `TuiPicker`, `PickerView`, `PickerViewProps`, `ResultSlot` alongside the existing `Picker` trait)
+- Modify: `Cargo.toml` (replace `eframe`/`egui` with `ntui` and `tokio`)
 
 **Interfaces:**
 - Consumes: `Picker` trait and `WindowInfo` from Task 2.
-- Produces: `pub struct GuiPicker;` implementing `Picker` — `impl Picker for GuiPicker { fn pick(&self, windows: &[WindowInfo]) -> Option<String> }`.
+- Produces: `pub struct TuiPicker;` implementing `Picker` — `impl Picker for TuiPicker { fn pick(&self, windows: &[WindowInfo]) -> Option<String> }`.
 
-No automated tests (real GUI); verified manually.
+`ntui` (`https://github.com/quinnjr/ntui`) is an Ink-style, hooks-based TUI
+library over `crossterm`, requiring a `tokio` runtime. Components are
+`#[component] fn Name(props: &NameProps, hooks: &mut Hooks) -> Element`;
+`NameProps` must be `Clone + PartialEq + Default`. `render(Element) -> impl
+Future<Output = Result<(), Error>>` drives a component tree against a real
+terminal until `hooks.use_app().exit()` is called; `ntui::testing::TestTerminal`
+does the same headlessly, frame by frame, for tests — no real terminal or
+display needed.
 
-- [ ] **Step 1: Implement `GuiPicker` in `src/picker.rs`**
+Getting the picked window id out of `render()` (which only returns
+`Result<(), Error>`, no app data) requires a props field that's a shared
+cell: `ResultSlot(Arc<Mutex<Option<String>>>)`, with a hand-written
+`PartialEq` (pointer identity via `Arc::ptr_eq`) since `Mutex` itself isn't
+`PartialEq` — the props-diffing machinery needs *some* `PartialEq` impl to
+exist, and identity is the only sensible one for a mutable cell used as an
+out-parameter.
+
+- [ ] **Step 1: `zbus`'s "blocking" feature alone is insufficient — fix that first**
+
+Before writing the picker: Task 1/3's `zbus = { version = "4", default-features = false, features = ["blocking"] }` was actually wrong (it happened to build then, but broke once `tokio` was added as a direct dependency and Cargo's feature unification changed). In zbus 4.4, the `blocking` feature flag alone doesn't pull in the async-io executor (`async-io`/`async-lock`/`async-fs`) that the blocking API is implemented on top of — only the `async-io` feature does (and it implies `blocking`). Fix `Cargo.toml`:
+
+```toml
+zbus = { version = "4", default-features = false, features = ["async-io"] }
+```
+
+- [ ] **Step 2: Add `ntui` and `tokio` to `Cargo.toml`, remove `eframe`/`egui`**
+
+```toml
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+zbus = { version = "4", default-features = false, features = ["async-io"] }
+ntui = "0.1"
+tokio = { version = "1", features = ["rt", "macros"] }
+anyhow = "1"
+```
+
+(`macros` is needed for `#[tokio::test]` in this task's own tests, not just for production code.)
+
+- [ ] **Step 3: Implement `TuiPicker` in `src/picker.rs`**
 
 ```rust
 use crate::backend::WindowInfo;
-use std::cell::RefCell;
-use std::rc::Rc;
+use ntui::{component, element, render, BorderStyle, Color, Element, FlexDirection, KeyCode, Weight};
+use std::sync::{Arc, Mutex};
 
 pub trait Picker {
     fn pick(&self, windows: &[WindowInfo]) -> Option<String>;
 }
 
-pub struct GuiPicker;
+pub struct TuiPicker;
 
-struct PickerApp {
-    windows: Vec<WindowInfo>,
-    selected: usize,
-    result: Rc<RefCell<Option<String>>>,
-}
+#[derive(Clone, Default)]
+struct ResultSlot(Arc<Mutex<Option<String>>>);
 
-impl eframe::App for PickerApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        ctx.input(|i| {
-            if i.key_pressed(egui::Key::Escape) {
-                *self.result.borrow_mut() = None;
-                std::process::exit_code_hint();
-            }
-        });
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ctx.input(|i| {
-                if i.key_pressed(egui::Key::ArrowDown) {
-                    self.selected = (self.selected + 1).min(self.windows.len() - 1);
-                }
-                if i.key_pressed(egui::Key::ArrowUp) {
-                    self.selected = self.selected.saturating_sub(1);
-                }
-                if i.key_pressed(egui::Key::Enter) {
-                    *self.result.borrow_mut() = Some(self.windows[self.selected].id.clone());
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-                if i.key_pressed(egui::Key::Escape) {
-                    *self.result.borrow_mut() = None;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            });
-
-            for (idx, w) in self.windows.iter().enumerate() {
-                let text = format!("{}\n{}", w.title, w.subtext);
-                let selected = idx == self.selected;
-                if ui.selectable_label(selected, text).clicked() {
-                    *self.result.borrow_mut() = Some(w.id.clone());
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            }
-        });
+impl PartialEq for ResultSlot {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
-impl Picker for GuiPicker {
+#[derive(Clone, PartialEq, Default)]
+struct PickerViewProps {
+    windows: Vec<WindowInfo>,
+    result: ResultSlot,
+}
+
+#[component]
+fn PickerView(props: &PickerViewProps, hooks: &mut ntui::Hooks) -> ntui::Element {
+    let selected = hooks.use_state(|| 0usize);
+    let app = hooks.use_app();
+
+    let windows = props.windows.clone();
+    let result = props.result.clone();
+    let sel = selected.clone();
+    hooks.use_input(move |ev, _| {
+        let len = windows.len();
+        match ev.code {
+            KeyCode::Down => {
+                let i = sel.get();
+                sel.set((i + 1).min(len.saturating_sub(1)));
+            }
+            KeyCode::Up => {
+                let i = sel.get();
+                sel.set(i.saturating_sub(1));
+            }
+            KeyCode::Enter => {
+                let i = sel.get();
+                *result.0.lock().unwrap_or_else(|e| e.into_inner()) =
+                    windows.get(i).map(|w| w.id.clone());
+                app.exit();
+            }
+            KeyCode::Esc => {
+                *result.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                app.exit();
+            }
+            _ => {}
+        }
+    });
+
+    let idx = selected.get();
+    element! {
+        View(flex_direction: FlexDirection::Column, padding: 1, border_style: BorderStyle::Single) {
+            Text(content: "was — pick a window (up/down + enter, esc to cancel)", color: Color::DarkGrey)
+            #(props.windows.iter().enumerate().map(|(i, w)| {
+                let marker = if i == idx { ">" } else { " " };
+                element! {
+                    Text(content: format!("{marker} {}  {}", w.title, w.subtext),
+                         weight: if i == idx { Weight::Bold } else { Weight::Normal },
+                         key: w.id.clone())
+                }
+            }))
+        }
+    }
+}
+
+impl Picker for TuiPicker {
     fn pick(&self, windows: &[WindowInfo]) -> Option<String> {
-        let result = Rc::new(RefCell::new(None));
-        let app_result = result.clone();
-        let windows = windows.to_vec();
-
-        let native_options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_always_on_top()
-                .with_inner_size([420.0, 240.0]),
-            ..Default::default()
+        let result = ResultSlot::default();
+        let props = PickerViewProps {
+            windows: windows.to_vec(),
+            result: result.clone(),
         };
-
-        let _ = eframe::run_native(
-            "was picker",
-            native_options,
-            Box::new(move |_cc| {
-                Ok(Box::new(PickerApp {
-                    windows,
-                    selected: 0,
-                    result: app_result,
-                }))
-            }),
-        );
-
-        let out = result.borrow().clone();
-        out
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to start ntui runtime");
+        rt.block_on(render(Element::component::<PickerView>(props)))
+            .expect("ntui render failed");
+        result.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 ```
 
-Note: remove the stray `std::process::exit_code_hint();` line from the first
-`ctx.input` block above when writing the real file — it was left over from
-drafting and isn't a real API; the Escape handling inside `CentralPanel`
-below is the actual cancel path.
+- [ ] **Step 4: Write headless interaction tests using `ntui::testing::TestTerminal`**
 
-- [ ] **Step 2: Build**
-
-Run: `cargo build`
-Expected: compiles. `WindowInfo` needs `Clone` — already derived in Task 2.
-
-- [ ] **Step 3: Manual smoke test**
-
-Add a temporary call in `main()`:
+Append to `src/picker.rs`:
 
 ```rust
-fn main() {
-    let picker = picker::GuiPicker;
-    let windows = vec![
-        backend::WindowInfo { id: "1".into(), title: "Firefox".into(), icon: String::new(), subtext: "Desktop 1".into() },
-        backend::WindowInfo { id: "2".into(), title: "Konsole".into(), icon: String::new(), subtext: "Desktop 1".into() },
-    ];
-    println!("picked: {:?}", picker.pick(&windows));
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ntui::testing::TestTerminal;
+    use ntui::KeyCode;
+
+    fn window(id: &str, title: &str) -> WindowInfo {
+        WindowInfo {
+            id: id.to_string(),
+            title: title.to_string(),
+            icon: String::new(),
+            subtext: "Desktop 1".to_string(),
+        }
+    }
+
+    fn harness(windows: Vec<WindowInfo>) -> (TestTerminal, ResultSlot) {
+        let result = ResultSlot::default();
+        let props = PickerViewProps { windows, result: result.clone() };
+        let terminal = TestTerminal::new(60, 10, Element::component::<PickerView>(props)).unwrap();
+        (terminal, result)
+    }
+
+    #[tokio::test]
+    async fn initial_frame_selects_first_window() {
+        let (t, _result) = harness(vec![window("1", "Firefox"), window("2", "Konsole")]);
+        let frame = t.frame_text();
+        assert!(frame.contains("> Firefox"));
+        assert!(!frame.contains("> Konsole"));
+    }
+
+    #[tokio::test]
+    async fn down_moves_selection_to_next_window() {
+        let (mut t, _result) = harness(vec![window("1", "Firefox"), window("2", "Konsole")]);
+        t.send_key(KeyCode::Down).unwrap();
+        let frame = t.frame_text();
+        assert!(frame.contains("> Konsole"));
+        assert!(!frame.contains("> Firefox"));
+    }
+
+    #[tokio::test]
+    async fn down_does_not_move_past_last_window() {
+        let (mut t, _result) = harness(vec![window("1", "Firefox"), window("2", "Konsole")]);
+        t.send_key(KeyCode::Down).unwrap();
+        t.send_key(KeyCode::Down).unwrap();
+        let frame = t.frame_text();
+        assert!(frame.contains("> Konsole"));
+    }
+
+    #[tokio::test]
+    async fn enter_selects_current_window_and_exits() {
+        let (mut t, result) = harness(vec![window("1", "Firefox"), window("2", "Konsole")]);
+        t.send_key(KeyCode::Down).unwrap();
+        t.send_key(KeyCode::Enter).unwrap();
+        assert!(t.exited());
+        assert_eq!(result.0.lock().unwrap().as_deref(), Some("2"));
+    }
+
+    #[tokio::test]
+    async fn esc_cancels_and_exits_with_no_result() {
+        let (mut t, result) = harness(vec![window("1", "Firefox"), window("2", "Konsole")]);
+        t.send_key(KeyCode::Esc).unwrap();
+        assert!(t.exited());
+        assert_eq!(*result.0.lock().unwrap(), None);
+    }
 }
 ```
 
-Run: `cargo run` (requires the Wayland session — `WAYLAND_DISPLAY`/`DISPLAY` confirmed present).
-Expected: a small window listing "Firefox" and "Konsole" appears; selecting one with arrow keys + Enter, or clicking it, prints `picked: Some("1")` or `picked: Some("2")`; pressing Escape prints `picked: None`.
+- [ ] **Step 5: Run tests**
 
-- [ ] **Step 4: Commit**
+Run: `cargo test`
+Expected: 9 tests pass (4 `resolve::tests` from Task 2, 5 new `picker::tests`).
+
+- [ ] **Step 6: Manual visual smoke test (rendering only — see note below on interaction)**
+
+Temporarily call `picker::TuiPicker.pick(&windows)` from `main()` with a couple of fake `WindowInfo` entries and run it inside a real terminal (e.g. `konsole -e ./target/debug/was`, or directly in an interactive shell) — `cargo run` alone inside a non-interactive tool-harness shell will fail with an `Io` error ("No such device or address") since `ntui` needs a real tty for raw-mode/crossterm.
+
+Note: driving *interaction* (arrow keys, Enter) against a real terminal window from an automation harness without a proper input-injection tool (`ydotool`/`wtype`) is unreliable in a pure-Wayland KDE session — `xdotool` cannot target or reliably deliver keys to native Wayland surfaces here. The Step 4 `TestTerminal` tests are the actual verification of interaction correctness; the manual step here only confirms visual rendering in situ.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/picker.rs src/main.rs
-git commit -m "Add GuiPicker eframe/egui implementation"
+git add src/picker.rs Cargo.toml Cargo.lock src/main.rs .gitignore
+git commit -m "Add TuiPicker using ntui, with headless TestTerminal interaction tests"
 ```
 
 ---
@@ -575,19 +680,19 @@ git commit -m "Add GuiPicker eframe/egui implementation"
 - Modify: `src/main.rs` (replace debug scaffolding with real clap CLI)
 
 **Interfaces:**
-- Consumes: `detect_backend()` (Task 3), `GuiPicker` (Task 4), `resolve()` (Task 2).
+- Consumes: `detect_backend()` (Task 3), `TuiPicker` (Task 4), `resolve()` (Task 2).
 - Produces: `run_switch(query: &str) -> anyhow::Result<()>`, `run_list(query: Option<&str>) -> anyhow::Result<()>`.
 
 - [ ] **Step 1: Write `src/commands/switch.rs`**
 
 ```rust
 use crate::backend::detect_backend;
-use crate::picker::GuiPicker;
+use crate::picker::TuiPicker;
 use crate::resolve::resolve;
 
 pub fn run_switch(query: &str) -> anyhow::Result<()> {
     let backend = detect_backend()?;
-    let picker = GuiPicker;
+    let picker = TuiPicker;
     resolve(backend.as_ref(), &picker, query)
 }
 ```
@@ -667,7 +772,7 @@ Expected: builds; the 4 `resolve::tests` still pass (untouched by this task).
 
 Run: `cargo run -- list` — expect a tab-separated line per open window.
 Run: `cargo run -- switch konsole` with exactly one Konsole window open — expect it to raise/focus immediately with no picker.
-Run: `cargo run -- switch ""` (or any query matching 2+ windows) — expect the picker GUI to appear; select one and confirm it's activated.
+Run: `cargo run -- switch ""` (or any query matching 2+ windows) — expect the picker TUI to render in the current terminal; select one and confirm it's activated.
 Run: `cargo run -- switch this-matches-nothing-xyz` — expect stderr `was: no windows matched "this-matches-nothing-xyz"` and a non-zero exit code (`echo $?`).
 
 - [ ] **Step 7: Commit**
@@ -788,7 +893,7 @@ git commit -m "Add pure should_activate decision logic for notify clicks"
 - Modify: `src/main.rs` (add `Notify` subcommand)
 
 **Interfaces:**
-- Consumes: `should_activate`/`NotifyEvent` (Task 6), `resolve()` (Task 2), `detect_backend()` (Task 3), `GuiPicker` (Task 4).
+- Consumes: `should_activate`/`NotifyEvent` (Task 6), `detect_backend()` (Task 3). Does **not** consume `resolve()` or `TuiPicker` — notify never opens a picker (spec amendment: ambiguous notify matches are reported and left un-activated, not resolved interactively).
 - Produces: `pub fn run_notify(query: &str, summary: &str, body: Option<&str>, icon: Option<&str>) -> anyhow::Result<()>`.
 
 No automated tests for the D-Bus plumbing itself (real notification daemon
@@ -798,11 +903,10 @@ required); verified manually.
 
 ```rust
 use crate::backend::detect_backend;
-use crate::picker::GuiPicker;
-use crate::resolve::resolve;
 use std::collections::HashMap;
 use zbus::blocking::Connection;
 use zbus::zvariant::Value;
+use zbus::MatchRule;
 
 pub fn run_notify(
     query: &str,
@@ -833,44 +937,50 @@ pub fn run_notify(
     )?;
     let notification_id: u32 = reply.body().deserialize()?;
 
-    let action_proxy = conn.call_method(
-        Some("org.freedesktop.Notifications"),
-        "/org/freedesktop/Notifications",
-        Some("org.freedesktop.DBus.Peer"),
-        "Ping",
-        &(),
-    );
-    let _ = action_proxy;
-
-    let mut action_invoked = conn.receive_signal_with_args(
-        Some("org.freedesktop.Notifications"),
-        "ActionInvoked",
-        &[(0, &notification_id.to_string())],
-    )?;
-    let mut closed = conn.receive_signal_with_args(
-        Some("org.freedesktop.Notifications"),
-        "NotificationClosed",
-        &[(0, &notification_id.to_string())],
-    )?;
+    // A single match rule on the interface catches both signals; the loop
+    // below tells them apart by checking each message's member name.
+    let rule = MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .interface("org.freedesktop.Notifications")?
+        .path("/org/freedesktop/Notifications")?
+        .build();
+    let mut iter = zbus::blocking::MessageIterator::for_match_rule(rule, &conn, Some(16))?;
 
     let activate = loop {
-        if let Some(msg) = action_invoked.next() {
-            let (id, action_key): (u32, String) = msg.body().deserialize()?;
-            if let Some(decision) = should_activate(notification_id, NotifyEvent::ActionInvoked { id, action_key }) {
-                break decision;
+        let Some(msg) = iter.next() else { break false };
+        let msg = msg?;
+        let Some(member) = msg.header().member().map(|m| m.to_string()) else { continue };
+        let event = match member.as_str() {
+            "ActionInvoked" => {
+                let (id, action_key): (u32, String) = msg.body().deserialize()?;
+                NotifyEvent::ActionInvoked { id, action_key }
             }
-        } else if let Some(msg) = closed.next() {
-            let (id, _reason): (u32, u32) = msg.body().deserialize()?;
-            if let Some(decision) = should_activate(notification_id, NotifyEvent::Closed { id }) {
-                break decision;
+            "NotificationClosed" => {
+                let (id, _reason): (u32, u32) = msg.body().deserialize()?;
+                NotifyEvent::Closed { id }
             }
+            _ => continue,
+        };
+        if let Some(decision) = should_activate(notification_id, event) {
+            break decision;
         }
     };
 
-    if activate {
-        let backend = detect_backend()?;
-        let picker = GuiPicker;
-        resolve(backend.as_ref(), &picker, query)?;
+    if !activate {
+        return Ok(());
+    }
+
+    let backend = detect_backend()?;
+    let matches = backend.list_windows(query)?;
+    match matches.len() {
+        0 => anyhow::bail!("no windows matched \"{query}\""),
+        1 => backend.activate(&matches[0].id)?,
+        _ => {
+            eprintln!("was: \"{query}\" is ambiguous, not activating anything:");
+            for w in &matches {
+                eprintln!("  {}\t{}", w.id, w.title);
+            }
+        }
     }
     Ok(())
 }
@@ -910,17 +1020,16 @@ Command::Notify { query, summary, body, icon } => {
 - [ ] **Step 4: Build**
 
 Run: `cargo build`
-Expected: compiles. If `receive_signal_with_args` isn't the exact zbus 4.x
-API name/shape, check `cargo doc -p zbus --open` for the installed version
-and adjust to the equivalent (e.g. `MessageStream` + manual filtering by
-deserializing each signal and checking the id) — the decision logic in
-`should_activate` doesn't change either way.
+Expected: compiles.
 
 - [ ] **Step 5: Manual smoke test**
 
-Run: `cargo run -- notify --query konsole --summary "test notification"` with a Konsole window open, in one terminal.
+Run: `cargo run -- notify --query konsole --summary "test notification"` with exactly one Konsole window open, in one terminal.
 Click the notification body when it appears.
-Expected: the process was blocking, then exits after the click, and the Konsole window is raised/focused (single match) or the picker appears (multiple matches).
+Expected: the process was blocking, then exits after the click, and the Konsole window is raised/focused.
+
+Run again with a query matching 2+ windows and click the notification.
+Expected: process exits 0, prints the ambiguous candidates to stderr, activates nothing.
 
 Run again and dismiss the notification without clicking.
 Expected: process exits quietly (exit code 0) without activating anything.
@@ -959,8 +1068,8 @@ Expected: builds cleanly, binary at `target/release/was`.
 With at least two apps open (e.g. Konsole and Firefox):
 - `./target/release/was list` — lists all open windows.
 - `./target/release/was switch firefox` — raises Firefox with no picker (assuming one Firefox window).
-- `./target/release/was switch ""` — opens the picker across all windows; pick one, confirm activation.
-- `./target/release/was notify --query firefox --summary "test"` then click it — confirms Firefox is raised after click.
+- `./target/release/was switch ""` — opens the picker TUI across all windows; pick one, confirm activation.
+- `./target/release/was notify --query firefox --summary "test"` then click it — confirms Firefox is raised after click (single match); repeat with an ambiguous query to confirm it reports candidates and activates nothing.
 
 - [ ] **Step 5: Commit (only if Step 1 found and removed anything)**
 
@@ -973,6 +1082,7 @@ git commit -m "Remove leftover debug scaffolding"
 
 ## Plan Self-Review Notes
 
-- **Spec coverage:** `switch`/`list`/`notify` subcommands (Tasks 5, 7); `WindowBackend` trait + KWin backend over `org.kde.krunner1` (Tasks 2–3); picker GUI with 0/1/many branching and cancel-is-not-an-error (Tasks 2, 4); notify one-shot blocking flow with default-action click detection (Tasks 6–7); error handling for no backend / zero matches / activate failure (Task 3's `connect()` error, `resolve()`'s bail, `activate()`'s `?` propagation); unit tests against fake backend/picker for the branching logic and against pure event data for notify's decision logic (Tasks 2, 6); binary named `was` (Task 1). All spec sections have a task.
-- **Type consistency:** `WindowInfo { id, title, icon, subtext }` is defined once in Task 2 and used identically in Tasks 3, 4, 5, 7. `WindowBackend::list_windows(&self, query: &str)` / `activate(&self, id: &str)` signatures match between the Task 2 trait and the Task 3 `KWinBackend` impl and Task 2's `FakeBackend` test double. `Picker::pick(&self, windows: &[WindowInfo]) -> Option<String>` matches between Task 2's trait, Task 2's `FakePicker`, and Task 4's `GuiPicker`.
-- **Placeholder scan:** no TBD/TODO; the one intentionally-called-out leftover line in Task 4 Step 1 (`std::process::exit_code_hint()`) is explicitly flagged as not-real-code to delete, not a silent placeholder.
+- **Spec coverage:** `switch`/`list`/`notify` subcommands (Tasks 5, 7); `WindowBackend` trait + KWin backend over `org.kde.krunner1` (Tasks 2–3); picker TUI with 0/1/many branching and cancel-is-not-an-error (Tasks 2, 4); notify one-shot blocking flow with default-action click detection and no-picker ambiguous-match reporting (Tasks 6–7); error handling for no backend / zero matches / activate failure (Task 3's `connect()` error, `resolve()`'s bail, `activate()`'s `?` propagation); unit tests against fake backend/picker for the branching logic, headless `TestTerminal` tests for the picker's own interaction, and pure event data for notify's decision logic (Tasks 2, 4, 6); binary named `was` (Task 1). All spec sections have a task.
+- **Type consistency:** `WindowInfo { id, title, icon, subtext }` is defined once in Task 2 and used identically in Tasks 3, 4, 5, 7. `WindowBackend::list_windows(&self, query: &str)` / `activate(&self, id: &str)` signatures match between the Task 2 trait and the Task 3 `KWinBackend` impl and Task 2's `FakeBackend` test double. `Picker::pick(&self, windows: &[WindowInfo]) -> Option<String>` matches between Task 2's trait, Task 2's `FakePicker`, and Task 4's `TuiPicker`.
+- **Placeholder scan:** no TBD/TODO.
+- **Amendment note:** Task 4 and downstream references to it were changed from an `eframe`/`egui` GUI to an `ntui` TUI at the user's explicit request, mid-implementation (after Task 3 was already committed). `notify`'s ambiguous-match behavior was correspondingly changed from "open the picker" to "report candidates, activate nothing" per a follow-up user decision, since a notification click has no terminal to render a picker into.
