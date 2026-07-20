@@ -36,7 +36,12 @@ mod tests {
     use super::*;
 
     fn window(id: &str) -> WindowInfo {
-        WindowInfo { id: id.to_string(), title: format!("Window {id}"), icon: String::new(), subtext: String::new() }
+        WindowInfo {
+            id: id.to_string(),
+            title: format!("Window {id}"),
+            icon: String::new(),
+            subtext: String::new(),
+        }
     }
 
     #[test]

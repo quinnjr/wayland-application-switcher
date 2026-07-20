@@ -1,5 +1,7 @@
 use crate::backend::WindowInfo;
-use ntui::{component, element, render, BorderStyle, Color, Element, FlexDirection, KeyCode, Weight};
+use ntui::{
+    BorderStyle, Color, Element, FlexDirection, KeyCode, Weight, component, element, render,
+};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -93,8 +95,8 @@ impl Picker for TuiPicker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ntui::testing::TestTerminal;
     use ntui::KeyCode;
+    use ntui::testing::TestTerminal;
 
     fn window(id: &str, title: &str) -> WindowInfo {
         WindowInfo {
@@ -107,7 +109,10 @@ mod tests {
 
     fn harness(windows: Vec<WindowInfo>) -> (TestTerminal, ResultSlot) {
         let result = ResultSlot::default();
-        let props = PickerViewProps { windows: Rc::from(windows), result: result.clone() };
+        let props = PickerViewProps {
+            windows: Rc::from(windows),
+            result: result.clone(),
+        };
         let terminal = TestTerminal::new(60, 10, Element::component::<PickerView>(props)).unwrap();
         (terminal, result)
     }

@@ -37,9 +37,12 @@ fn main() -> std::process::ExitCode {
     let result = match cli.command {
         Command::Switch { query } => commands::run_switch(&query),
         Command::List { query } => commands::run_list(query.as_deref()),
-        Command::Notify { query, summary, body, icon } => {
-            commands::run_notify(&query, &summary, body.as_deref(), icon.as_deref())
-        }
+        Command::Notify {
+            query,
+            summary,
+            body,
+            icon,
+        } => commands::run_notify(&query, &summary, body.as_deref(), icon.as_deref()),
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
@@ -72,7 +75,8 @@ mod tests {
 
     #[test]
     fn notify_requires_query_and_summary_but_not_body_or_icon() {
-        let cli = Cli::try_parse_from(["was", "notify", "--query", "konsole", "--summary", "hi"]).unwrap();
+        let cli = Cli::try_parse_from(["was", "notify", "--query", "konsole", "--summary", "hi"])
+            .unwrap();
         assert!(matches!(
             cli.command,
             Command::Notify { query, summary, body: None, icon: None }

@@ -1,5 +1,5 @@
 use crate::backend::{WindowBackend, WindowInfo};
-use crate::timeout::{run_with_timeout, TimeoutError};
+use crate::timeout::{TimeoutError, run_with_timeout};
 use std::collections::HashMap;
 use std::time::Duration;
 use zbus::blocking::Connection;
@@ -16,7 +16,9 @@ pub struct KWinBackend {
 
 impl KWinBackend {
     pub fn connect() -> anyhow::Result<Self> {
-        Ok(Self { conn: Connection::session()? })
+        Ok(Self {
+            conn: Connection::session()?,
+        })
     }
 
     pub fn from_connection(conn: Connection) -> Self {
@@ -38,7 +40,14 @@ fn call_with_timeout<T: Send + 'static>(
     }
 }
 
-type MatchTuple = (String, String, String, i32, f64, HashMap<String, OwnedValue>);
+type MatchTuple = (
+    String,
+    String,
+    String,
+    i32,
+    f64,
+    HashMap<String, OwnedValue>,
+);
 
 impl WindowBackend for KWinBackend {
     fn list_windows(&self, query: &str) -> anyhow::Result<Vec<WindowInfo>> {
@@ -68,7 +77,12 @@ fn window_info_from_match(m: MatchTuple) -> WindowInfo {
         .and_then(|v| <&str>::try_from(v).ok())
         .map(|s| s.to_string())
         .unwrap_or_default();
-    WindowInfo { id, title, icon, subtext }
+    WindowInfo {
+        id,
+        title,
+        icon,
+        subtext,
+    }
 }
 
 #[cfg(test)]
@@ -77,7 +91,14 @@ mod tests {
     use zbus::zvariant::Value;
 
     fn match_tuple(properties: HashMap<String, OwnedValue>) -> MatchTuple {
-        ("id-1".to_string(), "Some Window".to_string(), "some-icon".to_string(), 1, 0.7, properties)
+        (
+            "id-1".to_string(),
+            "Some Window".to_string(),
+            "some-icon".to_string(),
+            1,
+            0.7,
+            properties,
+        )
     }
 
     #[test]
@@ -103,7 +124,10 @@ mod tests {
     #[test]
     fn subtext_defaults_to_empty_when_value_is_not_a_string() {
         let mut properties = HashMap::new();
-        properties.insert("subtext".to_string(), OwnedValue::try_from(Value::from(42i32)).unwrap());
+        properties.insert(
+            "subtext".to_string(),
+            OwnedValue::try_from(Value::from(42i32)).unwrap(),
+        );
         let info = window_info_from_match(match_tuple(properties));
         assert_eq!(info.subtext, "");
     }

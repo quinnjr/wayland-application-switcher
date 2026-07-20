@@ -2,6 +2,10 @@
 name = "wayland-application-switcher"
 version = "0.1.0"
 edition = "2024"
+description = "Wayland application switcher for KDE Plasma (KWin) over D-Bus"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/quinnjr/wayland-application-switcher"
+authors = ["Joseph R. Quinn <quinn.josephr@gmail.com>"]
 
 [[bin]]
 name = "was"
@@ -13,4 +17,26 @@ zbus = { version = "4", default-features = false, features = ["async-io"] }
 ntui = "0.1"
 tokio = { version = "1", features = ["rt", "macros"] }
 anyhow = "1"
+
+[package.metadata.deb]
+maintainer = "Joseph R. Quinn <quinn.josephr@gmail.com>"
+copyright = "2026, Joseph R. Quinn"
+license-file = ["LICENSE-MIT", "0"]
+extended-description = """\
+Lists and activates open windows on KDE Plasma (Wayland/KWin) over D-Bus, \
+with a terminal picker for ambiguous matches and a notify command that \
+raises a window when its own desktop notification is clicked."""
+depends = "$auto"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/was", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/wayland-application-switcher/README.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/was", dest = "/usr/bin/was", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/wayland-application-switcher/README.md", mode = "644", doc = true },
+]
 

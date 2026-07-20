@@ -1,11 +1,11 @@
 use crate::backend::kwin::KWinBackend;
-use crate::backend::{classify_matches, MatchResolution, WindowBackend};
-use crate::timeout::{run_with_timeout, TimeoutError};
+use crate::backend::{MatchResolution, WindowBackend, classify_matches};
+use crate::timeout::{TimeoutError, run_with_timeout};
 use std::collections::HashMap;
 use std::time::Duration;
+use zbus::MatchRule;
 use zbus::blocking::Connection;
 use zbus::zvariant::Value;
-use zbus::MatchRule;
 
 // Effectively unbounded — this only bounds the wait so a `was notify`
 // process invoked on a notification nobody ever acts on eventually exits
@@ -19,7 +19,9 @@ pub enum NotifyEvent {
 
 pub fn should_activate(target_id: u32, event: NotifyEvent) -> Option<bool> {
     match event {
-        NotifyEvent::ActionInvoked { id, action_key } if id == target_id && action_key == "default" => {
+        NotifyEvent::ActionInvoked { id, action_key }
+            if id == target_id && action_key == "default" =>
+        {
             Some(true)
         }
         NotifyEvent::Closed { id } if id == target_id => Some(false),
@@ -29,7 +31,9 @@ pub fn should_activate(target_id: u32, event: NotifyEvent) -> Option<bool> {
 
 fn wait_for_decision(conn: &Connection, notification_id: u32) -> anyhow::Result<bool> {
     let conn = conn.clone();
-    match run_with_timeout(NOTIFY_WAIT_TIMEOUT, move || wait_loop(&conn, notification_id)) {
+    match run_with_timeout(NOTIFY_WAIT_TIMEOUT, move || {
+        wait_loop(&conn, notification_id)
+    }) {
         Ok(result) => result,
         Err(TimeoutError::Elapsed) => Ok(false),
         Err(TimeoutError::WorkerPanicked) => {
@@ -49,10 +53,14 @@ fn wait_loop(conn: &Connection, notification_id: u32) -> anyhow::Result<bool> {
     let mut iter = zbus::blocking::MessageIterator::for_match_rule(rule, conn, Some(16))?;
 
     loop {
-        let Some(msg) = iter.next() else { return Ok(false) };
+        let Some(msg) = iter.next() else {
+            return Ok(false);
+        };
         let msg = msg?;
         let header = msg.header();
-        let Some(member) = header.member() else { continue };
+        let Some(member) = header.member() else {
+            continue;
+        };
         let event = match member.as_str() {
             "ActionInvoked" => {
                 let (id, action_key): (u32, String) = msg.body().deserialize()?;
@@ -130,19 +138,28 @@ mod tests {
 
     #[test]
     fn default_action_on_target_id_activates() {
-        let event = NotifyEvent::ActionInvoked { id: 42, action_key: "default".to_string() };
+        let event = NotifyEvent::ActionInvoked {
+            id: 42,
+            action_key: "default".to_string(),
+        };
         assert_eq!(should_activate(42, event), Some(true));
     }
 
     #[test]
     fn non_default_action_on_target_id_is_ignored() {
-        let event = NotifyEvent::ActionInvoked { id: 42, action_key: "other".to_string() };
+        let event = NotifyEvent::ActionInvoked {
+            id: 42,
+            action_key: "other".to_string(),
+        };
         assert_eq!(should_activate(42, event), None);
     }
 
     #[test]
     fn action_on_different_id_is_ignored() {
-        let event = NotifyEvent::ActionInvoked { id: 7, action_key: "default".to_string() };
+        let event = NotifyEvent::ActionInvoked {
+            id: 7,
+            action_key: "default".to_string(),
+        };
         assert_eq!(should_activate(42, event), None);
     }
 
@@ -177,12 +194,20 @@ mod tests {
     }
 
     fn window(id: &str) -> WindowInfo {
-        WindowInfo { id: id.to_string(), title: format!("Window {id}"), icon: String::new(), subtext: String::new() }
+        WindowInfo {
+            id: id.to_string(),
+            title: format!("Window {id}"),
+            icon: String::new(),
+            subtext: String::new(),
+        }
     }
 
     #[test]
     fn zero_matches_errors_and_does_not_activate() {
-        let backend = FakeBackend { windows: vec![], activated: RefCell::new(vec![]) };
+        let backend = FakeBackend {
+            windows: vec![],
+            activated: RefCell::new(vec![]),
+        };
         let err = activate_or_report(&backend, "query").unwrap_err();
         assert!(err.to_string().contains("query"));
         assert!(backend.activated.borrow().is_empty());
@@ -190,7 +215,10 @@ mod tests {
 
     #[test]
     fn single_match_activates_it() {
-        let backend = FakeBackend { windows: vec![window("1")], activated: RefCell::new(vec![]) };
+        let backend = FakeBackend {
+            windows: vec![window("1")],
+            activated: RefCell::new(vec![]),
+        };
         activate_or_report(&backend, "query").unwrap();
         assert_eq!(*backend.activated.borrow(), vec!["1".to_string()]);
     }

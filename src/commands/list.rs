@@ -1,5 +1,5 @@
-use crate::backend::detect_backend;
 use crate::backend::WindowBackend;
+use crate::backend::detect_backend;
 
 pub fn run_list(query: Option<&str>) -> anyhow::Result<()> {
     let backend = detect_backend()?;
@@ -38,19 +38,30 @@ mod tests {
     }
 
     fn window(id: &str) -> WindowInfo {
-        WindowInfo { id: id.to_string(), title: format!("Window {id}"), icon: String::new(), subtext: String::new() }
+        WindowInfo {
+            id: id.to_string(),
+            title: format!("Window {id}"),
+            icon: String::new(),
+            subtext: String::new(),
+        }
     }
 
     #[test]
     fn no_query_passes_through_as_empty_string_for_all_windows() {
-        let backend = FakeBackend { expected_query: "", windows: vec![window("1"), window("2")] };
+        let backend = FakeBackend {
+            expected_query: "",
+            windows: vec![window("1"), window("2")],
+        };
         let windows = list_windows(&backend, None).unwrap();
         assert_eq!(windows.len(), 2);
     }
 
     #[test]
     fn some_query_passes_through_verbatim() {
-        let backend = FakeBackend { expected_query: "konsole", windows: vec![window("1")] };
+        let backend = FakeBackend {
+            expected_query: "konsole",
+            windows: vec![window("1")],
+        };
         let windows = list_windows(&backend, Some("konsole")).unwrap();
         assert_eq!(windows.len(), 1);
     }

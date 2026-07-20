@@ -20,6 +20,17 @@ cargo build --release
 # binary at target/release/was
 ```
 
+Pushing a tag matching `v*` (e.g. `v0.1.0`) builds `.deb` and `.rpm`
+packages via CI and attaches them to a GitHub Release. To build them
+locally:
+
+```sh
+cargo install cargo-deb cargo-generate-rpm
+cargo build --release
+cargo deb --no-build      # target/debian/*.deb
+cargo generate-rpm        # target/generate-rpm/*.rpm
+```
+
 ## Usage
 
 ```sh

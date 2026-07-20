@@ -1,4 +1,4 @@
-use crate::backend::{classify_matches, MatchResolution, WindowBackend};
+use crate::backend::{MatchResolution, WindowBackend, classify_matches};
 use crate::picker::Picker;
 
 pub fn resolve(
@@ -57,7 +57,10 @@ mod tests {
 
     #[test]
     fn zero_matches_errors() {
-        let backend = FakeBackend { windows: vec![], activated: RefCell::new(vec![]) };
+        let backend = FakeBackend {
+            windows: vec![],
+            activated: RefCell::new(vec![]),
+        };
         let picker = FakePicker(None);
         let err = resolve(&backend, &picker, "nothing").unwrap_err();
         assert!(err.to_string().contains("nothing"));
