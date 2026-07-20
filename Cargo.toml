@@ -17,6 +17,8 @@ zbus = { version = "4", default-features = false, features = ["async-io"] }
 ntui = "0.1"
 tokio = { version = "1", features = ["rt", "macros"] }
 anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [package.metadata.deb]
 maintainer = "Joseph R. Quinn <quinn.josephr@gmail.com>"

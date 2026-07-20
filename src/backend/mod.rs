@@ -11,6 +11,7 @@ pub trait WindowBackend {
     fn activate(&self, id: &str) -> anyhow::Result<()>;
 }
 
+pub mod gnome;
 pub mod kwin;
 
 pub fn detect_backend() -> anyhow::Result<Box<dyn WindowBackend>> {
