@@ -1,23 +1,36 @@
 mod backend;
+mod commands;
 mod picker;
 mod resolve;
 
-fn main() {
-    use picker::Picker as _;
-    let picker = picker::TuiPicker;
-    let windows = vec![
-        backend::WindowInfo {
-            id: "1".into(),
-            title: "Firefox".into(),
-            icon: String::new(),
-            subtext: "Desktop 1".into(),
-        },
-        backend::WindowInfo {
-            id: "2".into(),
-            title: "Konsole".into(),
-            icon: String::new(),
-            subtext: "Desktop 1".into(),
-        },
-    ];
-    println!("picked: {:?}", picker.pick(&windows));
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "was", about = "Wayland application switcher")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Activate the window matching QUERY (or pick among several matches).
+    Switch { query: String },
+    /// List windows matching QUERY (all windows if omitted).
+    List { query: Option<String> },
+}
+
+fn main() -> std::process::ExitCode {
+    let cli = Cli::parse();
+    let result = match cli.command {
+        Command::Switch { query } => commands::run_switch(&query),
+        Command::List { query } => commands::run_list(query.as_deref()),
+    };
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("was: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
 }
