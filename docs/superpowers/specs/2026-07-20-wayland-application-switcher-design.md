@@ -28,7 +28,7 @@ Single binary `was` (package `wayland-application-switcher`), three
 subcommands:
 
 - `was switch <QUERY>` — filter windows by app/title; activate the sole
-  match, or open a picker GUI if several match.
+  match, or open a picker TUI if several match.
 - `was list [QUERY]` — print matching windows to stdout (scripting/debug
   aid); with no query, prints all windows.
 - `was notify --query <QUERY> --summary <TEXT> [--body <TEXT>] [--icon <NAME>]`
@@ -55,7 +55,7 @@ struct WindowInfo {
 exposed at `org.kde.KWin` `/WindowsRunner` (the same interface KRunner's
 built-in "windows" plugin uses):
 
-- `Match(query: &str) -> Vec<(id, text, icon_name, relevance, category, properties)>`
+- `Match(query: &str) -> Vec<(id, text, icon_name, category, relevance, properties)>`
   for listing/filtering.
 - `Run(id: &str, action_id: &str)` with an empty `action_id` to activate the
   matched window.
@@ -64,9 +64,14 @@ Verified live in this session: `Match("konsole")` correctly returned the
 open Konsole window with title, icon name, and a "Activate running window
 on Desktop 1" subtext.
 
-Backend selection at startup: check for `org.kde.KWin` on the session bus.
-If absent, exit with a clear "no supported window backend found" error
-(no other backend is implemented yet).
+Backend selection at startup: `detect_backend()` just opens a plain
+session-bus connection (`Connection::session()`) — it does not itself
+verify KWin is present (no other backend is implemented yet, so nothing
+else to select between). The first real request (`Match`/`Run`, wrapped
+in a 3s timeout) is what actually confirms KWin is reachable; if that
+call fails or times out, it exits with a clear stderr error —
+`"KWin Match/Run call failed: ..."`, `"KWin is not responding"`, or
+`"KWin worker thread panicked or exited unexpectedly"`.
 
 ### Matching semantics
 
@@ -76,17 +81,19 @@ is passed straight through to `Match`, which does KRunner's normal
 substring/relevance matching against window titles and app names (matches
 the "windows of one app" use case). One code path serves both.
 
-## Picker GUI
+## Picker TUI
 
 - 0 matches: print an error naming the query to stderr, exit 1.
 - 1 match: activate immediately, no UI shown.
-- 2+ matches: open a small always-on-top `eframe`/`egui` window, one row
-  per match (title + subtext, icon best-effort). Arrow keys + Enter to
-  activate, mouse click also activates, Escape (or focus loss) cancels.
-- This is the same picker for both `switch` and post-click `notify`
-  activation — it does not assume a TTY is attached, since notification
-  clicks happen with no terminal in the picture.
+- 2+ matches (from an interactive `switch`/`list` invocation only — see
+  Notify flow below): render a picker in the current terminal via `ntui`
+  (an Ink-style, hooks-based TUI library), one row per match (title +
+  subtext). Up/Down + Enter to activate, Esc cancels.
 - Cancelling the picker is a normal outcome (exit 0), not a failure.
+- The picker's interaction logic (selection movement, Enter activates the
+  highlighted match, Esc cancels with no result) is covered by headless
+  `ntui::testing::TestTerminal` tests — deterministic, no real terminal or
+  display required.
 
 ## Notify flow
 
@@ -97,10 +104,17 @@ One-shot, blocking process — no persistent daemon:
    given summary/body/icon.
 2. Block on the session bus for either `ActionInvoked` (the default
    action = a click) or `NotificationClosed`, matched by this
-   notification's id. No timeout — the process waits until the user acts
-   on or dismisses the notification.
-3. On click: run the same match → single-activate-or-picker logic as
-   `was switch <QUERY>`.
+   notification's id, bounded by a 24-hour timeout (effectively
+   unbounded — it exists only so a notification nobody ever acts on
+   eventually lets the process exit rather than blocking forever). On
+   timeout, exit quietly (exit 0) as though dismissed.
+3. On click: look up matches for `QUERY` directly (no picker — a
+   notification click has no terminal attached to render one into).
+   - 0 matches: print an error naming the query, exit 1.
+   - 1 match: activate it.
+   - 2+ matches: print the ambiguous candidates (id/title) to stderr and
+     exit 0 without activating anything — notify never guesses and never
+     opens a picker.
 4. On dismiss without click: exit quietly (exit 0).
 
 Callers background this themselves, e.g.:
@@ -129,15 +143,20 @@ memory (no cross-process state needed).
 
 - Unit tests cover query-matching/selection branching (0 / 1 / many
   matches) against a fake in-memory `WindowBackend`, independent of D-Bus.
+- Picker interaction (selection, activate, cancel) is covered by headless
+  `ntui::testing::TestTerminal` tests.
 - `KWinBackend` itself is exercised manually against the live session (the
   only backend available to test here), not via automated tests.
 
 ## Dependencies
 
 - `clap` — CLI argument parsing.
-- `zbus` (`blocking` feature) — D-Bus calls without pulling in an async
-  runtime.
-- `eframe` / `egui` — picker GUI.
+- `zbus` (`async-io` feature) — D-Bus calls; pulls in `blocking` along with
+  the executor it needs (declaring `blocking` alone is not sufficient in
+  zbus 4.x — it doesn't itself pull the async-io executor backing it).
+- `ntui` — Ink-style TUI library (components/hooks over `crossterm`) for
+  the picker; also provides `testing::TestTerminal` for headless tests.
+- `tokio` (`rt`, `macros`) — async runtime `ntui` and its tests run on.
 
 ## Cargo.toml shape
 
