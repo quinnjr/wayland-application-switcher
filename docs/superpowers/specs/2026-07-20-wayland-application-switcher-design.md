@@ -55,7 +55,7 @@ struct WindowInfo {
 exposed at `org.kde.KWin` `/WindowsRunner` (the same interface KRunner's
 built-in "windows" plugin uses):
 
-- `Match(query: &str) -> Vec<(id, text, icon_name, relevance, category, properties)>`
+- `Match(query: &str) -> Vec<(id, text, icon_name, category, relevance, properties)>`
   for listing/filtering.
 - `Run(id: &str, action_id: &str)` with an empty `action_id` to activate the
   matched window.
@@ -64,9 +64,14 @@ Verified live in this session: `Match("konsole")` correctly returned the
 open Konsole window with title, icon name, and a "Activate running window
 on Desktop 1" subtext.
 
-Backend selection at startup: check for `org.kde.KWin` on the session bus.
-If absent, exit with a clear "no supported window backend found" error
-(no other backend is implemented yet).
+Backend selection at startup: `detect_backend()` just opens a plain
+session-bus connection (`Connection::session()`) — it does not itself
+verify KWin is present (no other backend is implemented yet, so nothing
+else to select between). The first real request (`Match`/`Run`, wrapped
+in a 3s timeout) is what actually confirms KWin is reachable; if that
+call fails or times out, it exits with a clear stderr error —
+`"KWin Match/Run call failed: ..."`, `"KWin is not responding"`, or
+`"KWin worker thread panicked or exited unexpectedly"`.
 
 ### Matching semantics
 
@@ -99,8 +104,10 @@ One-shot, blocking process — no persistent daemon:
    given summary/body/icon.
 2. Block on the session bus for either `ActionInvoked` (the default
    action = a click) or `NotificationClosed`, matched by this
-   notification's id. No timeout — the process waits until the user acts
-   on or dismisses the notification.
+   notification's id, bounded by a 24-hour timeout (effectively
+   unbounded — it exists only so a notification nobody ever acts on
+   eventually lets the process exit rather than blocking forever). On
+   timeout, exit quietly (exit 0) as though dismissed.
 3. On click: look up matches for `QUERY` directly (no picker — a
    notification click has no terminal attached to render one into).
    - 0 matches: print an error naming the query, exit 1.

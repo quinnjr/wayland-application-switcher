@@ -2,6 +2,7 @@ mod backend;
 mod commands;
 mod picker;
 mod resolve;
+mod timeout;
 
 use clap::{Parser, Subcommand};
 
@@ -46,5 +47,38 @@ fn main() -> std::process::ExitCode {
             eprintln!("was: {e}");
             std::process::ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn switch_requires_a_query() {
+        let cli = Cli::try_parse_from(["was", "switch", "konsole"]).unwrap();
+        assert!(matches!(cli.command, Command::Switch { query } if query == "konsole"));
+        assert!(Cli::try_parse_from(["was", "switch"]).is_err());
+    }
+
+    #[test]
+    fn list_query_is_optional() {
+        let cli = Cli::try_parse_from(["was", "list"]).unwrap();
+        assert!(matches!(cli.command, Command::List { query: None }));
+
+        let cli = Cli::try_parse_from(["was", "list", "konsole"]).unwrap();
+        assert!(matches!(cli.command, Command::List { query: Some(q) } if q == "konsole"));
+    }
+
+    #[test]
+    fn notify_requires_query_and_summary_but_not_body_or_icon() {
+        let cli = Cli::try_parse_from(["was", "notify", "--query", "konsole", "--summary", "hi"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Notify { query, summary, body: None, icon: None }
+                if query == "konsole" && summary == "hi"
+        ));
+        assert!(Cli::try_parse_from(["was", "notify", "--summary", "hi"]).is_err());
+        assert!(Cli::try_parse_from(["was", "notify", "--query", "konsole"]).is_err());
     }
 }

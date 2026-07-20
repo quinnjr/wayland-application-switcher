@@ -1,5 +1,6 @@
 use crate::backend::WindowInfo;
 use ntui::{component, element, render, BorderStyle, Color, Element, FlexDirection, KeyCode, Weight};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 pub trait Picker {
@@ -19,7 +20,7 @@ impl PartialEq for ResultSlot {
 
 #[derive(Clone, PartialEq, Default)]
 struct PickerViewProps {
-    windows: Vec<WindowInfo>,
+    windows: Rc<[WindowInfo]>,
     result: ResultSlot,
 }
 
@@ -76,7 +77,7 @@ impl Picker for TuiPicker {
     fn pick(&self, windows: &[WindowInfo]) -> Option<String> {
         let result = ResultSlot::default();
         let props = PickerViewProps {
-            windows: windows.to_vec(),
+            windows: Rc::from(windows),
             result: result.clone(),
         };
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -85,8 +86,7 @@ impl Picker for TuiPicker {
             .expect("failed to start ntui runtime");
         rt.block_on(render(Element::component::<PickerView>(props)))
             .expect("ntui render failed");
-        let out = result.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        out
+        result.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 
@@ -107,7 +107,7 @@ mod tests {
 
     fn harness(windows: Vec<WindowInfo>) -> (TestTerminal, ResultSlot) {
         let result = ResultSlot::default();
-        let props = PickerViewProps { windows, result: result.clone() };
+        let props = PickerViewProps { windows: Rc::from(windows), result: result.clone() };
         let terminal = TestTerminal::new(60, 10, Element::component::<PickerView>(props)).unwrap();
         (terminal, result)
     }

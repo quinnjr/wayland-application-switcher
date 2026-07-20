@@ -1,4 +1,4 @@
-use crate::backend::WindowBackend;
+use crate::backend::{classify_matches, MatchResolution, WindowBackend};
 use crate::picker::Picker;
 
 pub fn resolve(
@@ -7,10 +7,10 @@ pub fn resolve(
     query: &str,
 ) -> anyhow::Result<()> {
     let matches = backend.list_windows(query)?;
-    match matches.len() {
-        0 => anyhow::bail!("no windows matched \"{query}\""),
-        1 => backend.activate(&matches[0].id),
-        _ => match picker.pick(&matches) {
+    match classify_matches(matches) {
+        MatchResolution::None => anyhow::bail!("no windows matched \"{query}\""),
+        MatchResolution::One(w) => backend.activate(&w.id),
+        MatchResolution::Ambiguous(matches) => match picker.pick(&matches) {
             Some(id) => backend.activate(&id),
             None => Ok(()),
         },
