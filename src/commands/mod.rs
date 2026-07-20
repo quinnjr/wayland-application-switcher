@@ -1,4 +1,5 @@
 pub mod list;
+pub mod notify;
 pub mod switch;
 
 pub use list::run_list;
