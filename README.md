@@ -7,10 +7,14 @@ is clicked.
 
 ## Requirements
 
-- KDE Plasma on Wayland (`kwin_wayland`). `was` talks to KWin's
-  `org.kde.krunner1` interface at `org.kde.KWin` `/WindowsRunner` — the
-  same one KRunner's built-in "windows" plugin uses. No other compositor
-  is supported yet (see Architecture below).
+- KDE Plasma or GNOME Shell, both on Wayland. On KDE, `was` talks to
+  KWin's `org.kde.krunner1` interface at `org.kde.KWin`
+  `/WindowsRunner` — the same one KRunner's built-in "windows" plugin
+  uses. On GNOME, `was` requires the
+  [Window Calls](https://extensions.gnome.org/extension/4724/window-calls/)
+  GNOME Shell extension, since GNOME has no built-in D-Bus interface
+  that both lists and activates windows. No other compositor is
+  supported yet (see Architecture below).
 - Rust 2024 edition / a recent stable or nightly toolchain to build.
 
 ## Install / build
@@ -67,14 +71,27 @@ was notify --query slack --summary "New message" & disown
 ## How it works
 
 `was` has a `WindowBackend` trait so window listing/activation isn't
-hardwired to one compositor. Right now only `KWinBackend` is
-implemented, over KWin's `org.kde.krunner1` D-Bus interface:
+hardwired to one compositor; `detect_backend()` picks an implementation
+based on `XDG_CURRENT_DESKTOP`.
 
-- `Match(query)` lists/filters windows (empty query = all windows).
+**`KWinBackend`** (KDE) talks to KWin's `org.kde.krunner1` D-Bus
+interface:
+- `Match(query)` lists/filters windows server-side (empty query = all
+  windows).
 - `Run(id, "")` activates a window by id.
 
-Calls are wrapped in a 3-second timeout so a wedged compositor produces a
-clear error instead of hanging the CLI forever.
+**`GnomeBackend`** (GNOME) talks to the
+[Window Calls](https://extensions.gnome.org/extension/4724/window-calls/)
+extension's `org.gnome.Shell.Extensions.Windows` D-Bus interface:
+- `List()` returns every window (as JSON); `was` filters client-side
+  with a case-insensitive substring match on title/app class, since
+  this interface has no server-side query.
+- `Activate(id)` activates a window by id.
+
+Both backends wrap their D-Bus calls in a 3-second timeout (shared
+helper in `src/timeout.rs`) so a wedged compositor, or a missing/
+disabled Window Calls extension on GNOME, produces a clear error
+instead of hanging the CLI forever.
 
 ## Development
 

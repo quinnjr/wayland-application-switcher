@@ -34,13 +34,14 @@ which exposes `org.gnome.Shell.Extensions.Windows` at
 interface, list + activate — just gated behind a one-time extension
 install rather than being built into the compositor.
 
-**Assumption flagged for implementation-time verification:** the exact
-JSON field names `List()` returns (`wm_class`, `title`, `workspace`,
-etc.) are based on external research, not a live GNOME session in this
-environment (this dev machine is KDE Plasma). Confirm the real schema
-against the extension's README/source
-([github.com/ickyicky/window-calls](https://github.com/ickyicky/window-calls))
-during implementation before finalizing the deserialization type.
+**Verified during implementation** (2026-07-20): `List()` returns a
+JSON string (D-Bus `s` out-arg, not a native array) containing objects
+with `id` (u32), `title`, `wm_class`, `workspace` (i32, among other
+unused fields). `Activate(winid: u32)` takes a plain `u` in-arg and
+returns nothing. Confirmed against the extension's inlined D-Bus
+interface XML and `List()`/`Activate()` implementations in
+`extension.js` at
+[github.com/ickyicky/window-calls](https://github.com/ickyicky/window-calls).
 
 ## Scope
 
