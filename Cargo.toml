@@ -1,0 +1,16 @@
+[package]
+name = "wayland-application-switcher"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "was"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+zbus = { version = "4", default-features = false, features = ["blocking"] }
+eframe = "0.29"
+egui = "0.29"
+anyhow = "1"
+
