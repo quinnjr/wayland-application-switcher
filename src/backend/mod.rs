@@ -14,10 +14,6 @@ pub trait WindowBackend {
 pub mod gnome;
 pub mod kwin;
 
-pub fn detect_backend() -> anyhow::Result<Box<dyn WindowBackend>> {
-    Ok(Box::new(kwin::KWinBackend::connect()?))
-}
-
 pub enum MatchResolution {
     None,
     One(WindowInfo),
@@ -29,6 +25,34 @@ pub fn classify_matches(mut matches: Vec<WindowInfo>) -> MatchResolution {
         0 => MatchResolution::None,
         1 => MatchResolution::One(matches.remove(0)),
         _ => MatchResolution::Ambiguous(matches),
+    }
+}
+
+#[derive(Debug)]
+pub enum Backend {
+    Kde,
+    Gnome,
+}
+
+pub fn backend_for_desktop(desktop: &str) -> Result<Backend, String> {
+    if desktop.contains("GNOME") {
+        Ok(Backend::Gnome)
+    } else if desktop.contains("KDE") {
+        Ok(Backend::Kde)
+    } else {
+        Err(format!(
+            "unsupported desktop environment (XDG_CURRENT_DESKTOP={desktop:?}); \
+             only KDE Plasma and GNOME are supported"
+        ))
+    }
+}
+
+pub fn detect_backend() -> anyhow::Result<Box<dyn WindowBackend>> {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    match backend_for_desktop(&desktop) {
+        Ok(Backend::Kde) => Ok(Box::new(kwin::KWinBackend::connect()?)),
+        Ok(Backend::Gnome) => Ok(Box::new(gnome::GnomeBackend::connect()?)),
+        Err(msg) => anyhow::bail!(msg),
     }
 }
 
@@ -67,5 +91,33 @@ mod tests {
             }
             _ => panic!("expected MatchResolution::Ambiguous"),
         }
+    }
+
+    #[test]
+    fn plain_kde_selects_kde_backend() {
+        assert!(matches!(backend_for_desktop("KDE"), Ok(Backend::Kde)));
+    }
+
+    #[test]
+    fn plain_gnome_selects_gnome_backend() {
+        assert!(matches!(backend_for_desktop("GNOME"), Ok(Backend::Gnome)));
+    }
+
+    #[test]
+    fn colon_separated_desktop_list_containing_gnome_selects_gnome() {
+        // XDG_CURRENT_DESKTOP can be a colon-separated list, e.g. Ubuntu sets
+        // "ubuntu:GNOME" — a substring check must still catch it.
+        assert!(matches!(backend_for_desktop("ubuntu:GNOME"), Ok(Backend::Gnome)));
+    }
+
+    #[test]
+    fn unknown_desktop_is_rejected_with_a_clear_message() {
+        let err = backend_for_desktop("XFCE").unwrap_err();
+        assert!(err.contains("XFCE"));
+    }
+
+    #[test]
+    fn empty_desktop_is_rejected() {
+        assert!(backend_for_desktop("").is_err());
     }
 }
