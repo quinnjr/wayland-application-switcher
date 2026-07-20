@@ -107,7 +107,10 @@ mod tests {
     fn colon_separated_desktop_list_containing_gnome_selects_gnome() {
         // XDG_CURRENT_DESKTOP can be a colon-separated list, e.g. Ubuntu sets
         // "ubuntu:GNOME" — a substring check must still catch it.
-        assert!(matches!(backend_for_desktop("ubuntu:GNOME"), Ok(Backend::Gnome)));
+        assert!(matches!(
+            backend_for_desktop("ubuntu:GNOME"),
+            Ok(Backend::Gnome)
+        ));
     }
 
     #[test]

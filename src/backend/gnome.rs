@@ -1,5 +1,5 @@
 use crate::backend::{WindowBackend, WindowInfo};
-use crate::timeout::{run_with_timeout, TimeoutError};
+use crate::timeout::{TimeoutError, run_with_timeout};
 use std::time::Duration;
 use zbus::blocking::Connection;
 
@@ -67,8 +67,10 @@ impl WindowBackend for GnomeBackend {
 #[derive(serde::Deserialize)]
 struct GnomeWindow {
     id: u32,
-    title: String,
-    wm_class: String,
+    // Mutter's get_title()/get_wm_class() are nullable, and the extension
+    // passes their result through unchanged — so these can be JSON null.
+    title: Option<String>,
+    wm_class: Option<String>,
     workspace: i32,
 }
 
@@ -77,13 +79,17 @@ fn matches_query(w: &GnomeWindow, query: &str) -> bool {
         return true;
     }
     let query = query.to_lowercase();
-    w.title.to_lowercase().contains(&query) || w.wm_class.to_lowercase().contains(&query)
+    let field_matches = |f: &Option<String>| {
+        f.as_deref()
+            .is_some_and(|s| s.to_lowercase().contains(&query))
+    };
+    field_matches(&w.title) || field_matches(&w.wm_class)
 }
 
 fn window_info_from_gnome_window(w: GnomeWindow) -> WindowInfo {
     WindowInfo {
         id: w.id.to_string(),
-        title: w.title,
+        title: w.title.unwrap_or_default(),
         icon: String::new(),
         subtext: format!("Activate running window on workspace {}", w.workspace),
     }
@@ -94,7 +100,12 @@ mod tests {
     use super::*;
 
     fn window(id: u32, title: &str, wm_class: &str, workspace: i32) -> GnomeWindow {
-        GnomeWindow { id, title: title.to_string(), wm_class: wm_class.to_string(), workspace }
+        GnomeWindow {
+            id,
+            title: Some(title.to_string()),
+            wm_class: Some(wm_class.to_string()),
+            workspace,
+        }
     }
 
     #[test]
@@ -142,6 +153,28 @@ mod tests {
         let windows: Vec<GnomeWindow> = serde_json::from_str(json).unwrap();
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].id, 7);
-        assert_eq!(windows[0].title, "Term");
+        assert_eq!(windows[0].title.as_deref(), Some("Term"));
+    }
+
+    #[test]
+    fn null_title_and_wm_class_deserialize_and_do_not_match_queries() {
+        let json = r#"[{"id": 9, "title": null, "wm_class": null, "workspace": 0}]"#;
+        let windows: Vec<GnomeWindow> = serde_json::from_str(json).unwrap();
+        assert_eq!(windows.len(), 1);
+        let w = &windows[0];
+        assert!(matches_query(w, ""));
+        assert!(!matches_query(w, "firefox"));
+    }
+
+    #[test]
+    fn null_title_maps_to_empty_string() {
+        let w = GnomeWindow {
+            id: 9,
+            title: None,
+            wm_class: None,
+            workspace: 0,
+        };
+        let info = window_info_from_gnome_window(w);
+        assert_eq!(info.title, "");
     }
 }
