@@ -9,8 +9,8 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-zbus = { version = "4", default-features = false, features = ["blocking"] }
-eframe = "0.29"
-egui = "0.29"
+zbus = { version = "4", default-features = false, features = ["async-io"] }
+ntui = "0.1"
+tokio = { version = "1", features = ["rt", "macros"] }
 anyhow = "1"
 

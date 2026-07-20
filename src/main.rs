@@ -3,9 +3,21 @@ mod picker;
 mod resolve;
 
 fn main() {
-    let backend = backend::detect_backend().expect("backend detect failed");
-    let windows = backend.list_windows("konsole").expect("list_windows failed");
-    for w in &windows {
-        println!("{:?}", w);
-    }
+    use picker::Picker as _;
+    let picker = picker::TuiPicker;
+    let windows = vec![
+        backend::WindowInfo {
+            id: "1".into(),
+            title: "Firefox".into(),
+            icon: String::new(),
+            subtext: "Desktop 1".into(),
+        },
+        backend::WindowInfo {
+            id: "2".into(),
+            title: "Konsole".into(),
+            icon: String::new(),
+            subtext: "Desktop 1".into(),
+        },
+    ];
+    println!("picked: {:?}", picker.pick(&windows));
 }
