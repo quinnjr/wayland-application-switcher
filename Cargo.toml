@@ -1,6 +1,6 @@
 [package]
 name = "wayland-application-switcher"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Wayland application switcher for KDE Plasma (KWin) and GNOME Shell over D-Bus"
 license = "MIT OR Apache-2.0"
