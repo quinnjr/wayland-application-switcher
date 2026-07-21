@@ -1,9 +1,9 @@
 # was — Wayland Application Switcher
 
-A small CLI for KDE Plasma on Wayland that lists and activates open
-windows over D-Bus, with a terminal picker for ambiguous matches and a
-`notify` command that raises a window when its own desktop notification
-is clicked.
+A small CLI for KDE Plasma and GNOME Shell on Wayland that lists and
+activates open windows over D-Bus, with a terminal picker for ambiguous
+matches and a `notify` command that raises a window when its own desktop
+notification is clicked.
 
 ## Requirements
 

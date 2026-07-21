@@ -22,9 +22,10 @@ impl KWinBackend {
 
 fn call_with_timeout<T: Send + 'static>(
     context: &'static str,
+    hint: Option<&'static str>,
     f: impl FnOnce() -> zbus::Result<T> + Send + 'static,
 ) -> anyhow::Result<T> {
-    call_dbus_with_timeout(DBUS_CALL_TIMEOUT, "KWin", context, None, f)
+    call_dbus_with_timeout(DBUS_CALL_TIMEOUT, "KWin", context, hint, f)
 }
 
 type MatchTuple = (
@@ -40,7 +41,7 @@ impl WindowBackend for KWinBackend {
     fn list_windows(&self, query: &str) -> anyhow::Result<Vec<WindowInfo>> {
         let conn = self.conn.clone();
         let query = query.to_string();
-        let reply = call_with_timeout("KWin Match call failed", move || {
+        let reply = call_with_timeout("KWin Match call failed", None, move || {
             conn.call_method(Some(DEST), PATH, Some(IFACE), "Match", &(query,))
         })?;
         let matches: Vec<MatchTuple> = reply.body().deserialize()?;
@@ -50,7 +51,7 @@ impl WindowBackend for KWinBackend {
     fn activate(&self, id: &str) -> anyhow::Result<()> {
         let conn = self.conn.clone();
         let id = id.to_string();
-        call_with_timeout("KWin Run call failed", move || {
+        call_with_timeout("KWin Run call failed", None, move || {
             conn.call_method(Some(DEST), PATH, Some(IFACE), "Run", &(id, ""))
         })?;
         Ok(())

@@ -62,11 +62,14 @@ fn parse_window_id(id: &str) -> anyhow::Result<u32> {
 /// Parses the Window Calls `List()` JSON and returns the windows matching
 /// `query`. Records are parsed individually so one malformed window
 /// (extension version skew) is skipped with a warning instead of aborting
-/// the whole list.
+/// the whole list — but if *every* record fails, that's a broken schema,
+/// not an empty desktop, and it surfaces as an error rather than being
+/// indistinguishable from "no windows matched".
 fn windows_matching(json: &str, query: &str) -> anyhow::Result<Vec<WindowInfo>> {
     let records: Vec<serde_json::Value> = serde_json::from_str(json)
         .context("GNOME List: could not parse Window Calls JSON response")?;
-    Ok(records
+    let total = records.len();
+    let windows: Vec<GnomeWindow> = records
         .into_iter()
         .filter_map(
             |record| match serde_json::from_value::<GnomeWindow>(record) {
@@ -77,7 +80,17 @@ fn windows_matching(json: &str, query: &str) -> anyhow::Result<Vec<WindowInfo>> 
                 }
             },
         )
-        .filter(|w| matches_query(w, query))
+        .collect();
+    if windows.is_empty() && total > 0 {
+        anyhow::bail!(
+            "GNOME List: none of the {total} windows from Window Calls could be parsed \
+             (likely an incompatible extension version — {INSTALL_HINT})"
+        );
+    }
+    let tokens = tokenize_query(query);
+    Ok(windows
+        .into_iter()
+        .filter(|w| matches_tokens(w, &tokens))
         .map(window_info_from_gnome_window)
         .collect())
 }
@@ -94,17 +107,28 @@ struct GnomeWindow {
     workspace: Option<i32>,
 }
 
-fn matches_query(w: &GnomeWindow, query: &str) -> bool {
-    // Every whitespace-separated query token must appear case-insensitively
-    // in the title or the wm_class (an empty query keeps every window).
-    // Token-based rather than whole-substring so multi-word queries behave
-    // like KWin's server-side matching instead of diverging on GNOME.
+fn tokenize_query(query: &str) -> Vec<String> {
+    query
+        .to_lowercase()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
+}
+
+fn matches_tokens(w: &GnomeWindow, tokens: &[String]) -> bool {
+    // Every query token must appear case-insensitively in the title or the
+    // wm_class; no tokens (empty/whitespace-only query) keeps every window.
+    // Token-based rather than whole-substring so multi-word queries don't
+    // require contiguous phrasing — an approximation of (not an exact match
+    // for) KWin's server-side matching.
+    if tokens.is_empty() {
+        return true;
+    }
     let title = w.title.as_deref().unwrap_or_default().to_lowercase();
     let wm_class = w.wm_class.as_deref().unwrap_or_default().to_lowercase();
-    let query = query.to_lowercase();
-    query
-        .split_whitespace()
-        .all(|token| title.contains(token) || wm_class.contains(token))
+    tokens
+        .iter()
+        .all(|token| title.contains(token.as_str()) || wm_class.contains(token.as_str()))
 }
 
 fn window_info_from_gnome_window(w: GnomeWindow) -> WindowInfo {
@@ -126,6 +150,10 @@ fn window_info_from_gnome_window(w: GnomeWindow) -> WindowInfo {
 mod tests {
     use super::*;
 
+    fn matches_query(w: &GnomeWindow, query: &str) -> bool {
+        matches_tokens(w, &tokenize_query(query))
+    }
+
     fn window(id: u32, title: &str, wm_class: &str, workspace: i32) -> GnomeWindow {
         GnomeWindow {
             id,
@@ -139,6 +167,12 @@ mod tests {
     fn empty_query_matches_everything() {
         let w = window(1, "Firefox", "firefox", 0);
         assert!(matches_query(&w, ""));
+    }
+
+    #[test]
+    fn whitespace_only_query_matches_everything() {
+        let w = window(1, "Firefox", "firefox", 0);
+        assert!(matches_query(&w, "   "));
     }
 
     #[test]
@@ -204,6 +238,21 @@ mod tests {
     #[test]
     fn windows_matching_rejects_a_non_array_payload() {
         assert!(windows_matching(r#"{"oops": true}"#, "").is_err());
+    }
+
+    #[test]
+    fn windows_matching_errors_when_every_record_is_malformed() {
+        let json = r#"[
+            {"id": "a", "title": "One", "wm_class": "x", "workspace": 0},
+            {"id": "b", "title": "Two", "wm_class": "y", "workspace": 0}
+        ]"#;
+        let err = windows_matching(json, "").unwrap_err();
+        assert!(err.to_string().contains("none of the 2 windows"));
+    }
+
+    #[test]
+    fn windows_matching_accepts_an_empty_window_list() {
+        assert!(windows_matching("[]", "").unwrap().is_empty());
     }
 
     #[test]

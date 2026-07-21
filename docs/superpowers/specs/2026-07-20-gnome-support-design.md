@@ -64,8 +64,8 @@ and dispatches:
 pub fn detect_backend() -> anyhow::Result<Box<dyn WindowBackend>> {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
     match backend_for_desktop(&desktop) {
-        Backend::Gnome => Ok(Box::new(gnome::GnomeBackend::connect()?)),
         Backend::Kde => Ok(Box::new(kwin::KWinBackend::connect()?)),
+        Backend::Gnome => Ok(Box::new(gnome::GnomeBackend::connect()?)),
     }
 }
 ```
@@ -120,8 +120,9 @@ happens client-side in `GnomeBackend::list_windows`:
 - Non-empty query → keep a window if every whitespace-separated query
   token is a case-insensitive substring of its `title` OR its
   `wm_class` (tokens may match different fields). Token-based rather
-  than whole-substring so multi-word queries behave like KWin's
-  server-side matching instead of diverging on GNOME.
+  than whole-substring so multi-word queries don't require contiguous
+  phrasing — an approximation of (not an exact match for) KWin's
+  server-side matching.
 - Map each surviving `GnomeWindow` to `WindowInfo`:
   - `id` ← `GnomeWindow.id`, stringified.
   - `title` ← `GnomeWindow.title`.
@@ -141,18 +142,24 @@ happens client-side in `GnomeBackend::list_windows`:
 
 ## Error handling
 
-- Window Calls not installed/enabled: the `Activate`/`List` D-Bus call
-  fails; wrapped into an error naming the extension and pointing at
-  `extensions.gnome.org/extension/4724` to install it (GNOME's
-  equivalent of KWin's "not reachable"/"is not responding" errors).
+- Window Calls not installed/enabled: the `List` D-Bus call — the first
+  call every command makes, so a missing extension always surfaces on
+  this path — fails and is wrapped into an error naming the extension
+  and pointing at `extensions.gnome.org/extension/4724` to install it
+  (GNOME's equivalent of KWin's "not reachable"/"is not responding"
+  errors). `Activate` failures carry no install hint, since a working
+  `List` has already proven the extension is present.
 - Unrecognized or unset `XDG_CURRENT_DESKTOP`: falls back to the KWin
   backend (see Architecture) rather than erroring, so headless-ish
   invocation contexts keep working; a genuinely unsupported compositor
   then surfaces as KWin's own "not reachable" error.
-- A GNOME session with an incompatible/older Window Calls API version
-  producing a deserialization error: surfaces as a plain D-Bus/serde
-  error via the existing `?` propagation — no special handling beyond
-  what already exists, consistent with how KWin errors propagate.
+- A GNOME session with an incompatible/older Window Calls API version:
+  `List` records are parsed individually — a window that fails to
+  deserialize is skipped with a stderr warning so one odd record can't
+  hide every good window. If *every* record fails (a wholesale schema
+  break), that surfaces as an error carrying the install hint rather
+  than an empty list, so it can't masquerade as "no windows matched".
+  A reply that isn't a JSON array at all fails with explicit context.
 
 ## Testing
 

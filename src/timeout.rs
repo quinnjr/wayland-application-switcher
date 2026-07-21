@@ -85,6 +85,19 @@ mod tests {
     }
 
     #[test]
+    fn dbus_success_returns_the_inner_value() {
+        let v = call_dbus_with_timeout(
+            Duration::from_secs(1),
+            "TestServer",
+            "Test call failed",
+            None,
+            || Ok::<_, zbus::Error>(7u32),
+        )
+        .unwrap();
+        assert_eq!(v, 7);
+    }
+
+    #[test]
     fn dbus_error_includes_context_and_hint() {
         let err = call_dbus_with_timeout::<()>(
             Duration::from_secs(1),
