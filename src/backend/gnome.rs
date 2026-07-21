@@ -1,15 +1,13 @@
 use crate::backend::{WindowBackend, WindowInfo};
-use crate::timeout::call_dbus_with_timeout;
+use crate::timeout::{DBUS_CALL_TIMEOUT, call_dbus_with_timeout};
 use anyhow::Context;
-use std::time::Duration;
 use zbus::blocking::Connection;
 
 const DEST: &str = "org.gnome.Shell";
 const PATH: &str = "/org/gnome/Shell/Extensions/Windows";
 const IFACE: &str = "org.gnome.Shell.Extensions.Windows";
-const CALL_TIMEOUT: Duration = Duration::from_secs(3);
-const INSTALL_HINT: &str = "is the \"Window Calls\" GNOME Shell extension installed and enabled? \
-     https://extensions.gnome.org/extension/4724/window-calls/";
+const INSTALL_HINT: &str = "if this persists, confirm the \"Window Calls\" GNOME Shell extension \
+     is installed and enabled: https://extensions.gnome.org/extension/4724/window-calls/";
 
 pub struct GnomeBackend {
     conn: Connection,
@@ -28,7 +26,7 @@ fn call_with_timeout<T: Send + 'static>(
     hint: Option<&'static str>,
     f: impl FnOnce() -> zbus::Result<T> + Send + 'static,
 ) -> anyhow::Result<T> {
-    call_dbus_with_timeout(CALL_TIMEOUT, "GNOME Shell", context, hint, f)
+    call_dbus_with_timeout(DBUS_CALL_TIMEOUT, "GNOME Shell", context, hint, f)
 }
 
 impl WindowBackend for GnomeBackend {
@@ -43,13 +41,7 @@ impl WindowBackend for GnomeBackend {
             .body()
             .deserialize()
             .context("GNOME List: unexpected D-Bus reply body from Window Calls extension")?;
-        let windows: Vec<GnomeWindow> = serde_json::from_str(&json)
-            .context("GNOME List: could not parse Window Calls JSON response")?;
-        Ok(windows
-            .into_iter()
-            .filter(|w| matches_query(w, query))
-            .map(window_info_from_gnome_window)
-            .collect())
+        windows_matching(&json, query)
     }
 
     fn activate(&self, id: &str) -> anyhow::Result<()> {
@@ -67,6 +59,29 @@ fn parse_window_id(id: &str) -> anyhow::Result<u32> {
         .map_err(|_| anyhow::anyhow!("invalid GNOME window id: {id:?}"))
 }
 
+/// Parses the Window Calls `List()` JSON and returns the windows matching
+/// `query`. Records are parsed individually so one malformed window
+/// (extension version skew) is skipped with a warning instead of aborting
+/// the whole list.
+fn windows_matching(json: &str, query: &str) -> anyhow::Result<Vec<WindowInfo>> {
+    let records: Vec<serde_json::Value> = serde_json::from_str(json)
+        .context("GNOME List: could not parse Window Calls JSON response")?;
+    Ok(records
+        .into_iter()
+        .filter_map(
+            |record| match serde_json::from_value::<GnomeWindow>(record) {
+                Ok(w) => Some(w),
+                Err(e) => {
+                    eprintln!("was: skipping unparseable window from Window Calls: {e}");
+                    None
+                }
+            },
+        )
+        .filter(|w| matches_query(w, query))
+        .map(window_info_from_gnome_window)
+        .collect())
+}
+
 #[derive(serde::Deserialize)]
 struct GnomeWindow {
     id: u32,
@@ -74,22 +89,22 @@ struct GnomeWindow {
     // passes their result through unchanged — so these can be JSON null.
     title: Option<String>,
     wm_class: Option<String>,
-    // Tolerate the field being absent (extension version skew) so one odd
-    // window doesn't abort the whole List parse.
-    #[serde(default)]
+    // All three Option fields also tolerate the key being absent entirely
+    // (extension version skew) — serde maps a missing Option field to None.
     workspace: Option<i32>,
 }
 
 fn matches_query(w: &GnomeWindow, query: &str) -> bool {
-    if query.is_empty() {
-        return true;
-    }
+    // Every whitespace-separated query token must appear case-insensitively
+    // in the title or the wm_class (an empty query keeps every window).
+    // Token-based rather than whole-substring so multi-word queries behave
+    // like KWin's server-side matching instead of diverging on GNOME.
+    let title = w.title.as_deref().unwrap_or_default().to_lowercase();
+    let wm_class = w.wm_class.as_deref().unwrap_or_default().to_lowercase();
     let query = query.to_lowercase();
-    let field_matches = |f: &Option<String>| {
-        f.as_deref()
-            .is_some_and(|s| s.to_lowercase().contains(&query))
-    };
-    field_matches(&w.title) || field_matches(&w.wm_class)
+    query
+        .split_whitespace()
+        .all(|token| title.contains(token) || wm_class.contains(token))
 }
 
 fn window_info_from_gnome_window(w: GnomeWindow) -> WindowInfo {
@@ -142,6 +157,53 @@ mod tests {
     fn query_matching_neither_field_is_rejected() {
         let w = window(1, "Firefox", "firefox", 0);
         assert!(!matches_query(&w, "konsole"));
+    }
+
+    #[test]
+    fn multi_word_query_matches_tokens_in_any_order() {
+        let w = window(1, "Mozilla Firefox", "firefox", 0);
+        assert!(matches_query(&w, "firefox mozilla"));
+    }
+
+    #[test]
+    fn multi_word_query_tokens_may_match_different_fields() {
+        let w = window(1, "some window", "Konsole", 0);
+        assert!(matches_query(&w, "konsole window"));
+    }
+
+    #[test]
+    fn multi_word_query_with_an_unmatched_token_is_rejected() {
+        let w = window(1, "Mozilla Firefox", "firefox", 0);
+        assert!(!matches_query(&w, "firefox konsole"));
+    }
+
+    #[test]
+    fn windows_matching_filters_and_maps_end_to_end() {
+        let json = r#"[
+            {"id": 1, "title": "Mozilla Firefox", "wm_class": "firefox", "workspace": 0},
+            {"id": 2, "title": "Terminal", "wm_class": "Konsole", "workspace": 1}
+        ]"#;
+        let infos = windows_matching(json, "firefox").unwrap();
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].id, "1");
+        assert_eq!(infos[0].title, "Mozilla Firefox");
+        assert_eq!(infos[0].subtext, "Activate running window on workspace 1");
+    }
+
+    #[test]
+    fn windows_matching_skips_malformed_records_and_keeps_the_rest() {
+        let json = r#"[
+            {"id": "not-a-number", "title": "Broken", "wm_class": "x", "workspace": 0},
+            {"id": 2, "title": "Fine", "wm_class": "app", "workspace": 0}
+        ]"#;
+        let infos = windows_matching(json, "").unwrap();
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].id, "2");
+    }
+
+    #[test]
+    fn windows_matching_rejects_a_non_array_payload() {
+        assert!(windows_matching(r#"{"oops": true}"#, "").is_err());
     }
 
     #[test]

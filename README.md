@@ -83,9 +83,10 @@ interface:
 **`GnomeBackend`** (GNOME) talks to the
 [Window Calls](https://extensions.gnome.org/extension/4724/window-calls/)
 extension's `org.gnome.Shell.Extensions.Windows` D-Bus interface:
-- `List()` returns every window (as JSON); `was` filters client-side
-  with a case-insensitive substring match on title/app class, since
-  this interface has no server-side query.
+- `List()` returns every window (as JSON); `was` filters client-side,
+  since this interface has no server-side query: every
+  whitespace-separated query token must appear (case-insensitively) in
+  the window's title or app class.
 - `Activate(id)` activates a window by id.
 
 Both backends wrap their D-Bus calls in a 3-second timeout (shared

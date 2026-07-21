@@ -1,14 +1,12 @@
 use crate::backend::{WindowBackend, WindowInfo};
-use crate::timeout::call_dbus_with_timeout;
+use crate::timeout::{DBUS_CALL_TIMEOUT, call_dbus_with_timeout};
 use std::collections::HashMap;
-use std::time::Duration;
 use zbus::blocking::Connection;
 use zbus::zvariant::OwnedValue;
 
 const DEST: &str = "org.kde.KWin";
 const PATH: &str = "/WindowsRunner";
 const IFACE: &str = "org.kde.krunner1";
-const CALL_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub struct KWinBackend {
     conn: Connection,
@@ -26,7 +24,7 @@ fn call_with_timeout<T: Send + 'static>(
     context: &'static str,
     f: impl FnOnce() -> zbus::Result<T> + Send + 'static,
 ) -> anyhow::Result<T> {
-    call_dbus_with_timeout(CALL_TIMEOUT, "KWin", context, None, f)
+    call_dbus_with_timeout(DBUS_CALL_TIMEOUT, "KWin", context, None, f)
 }
 
 type MatchTuple = (

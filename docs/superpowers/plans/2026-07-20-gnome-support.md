@@ -1,5 +1,16 @@
 # GNOME Support Implementation Plan
 
+> **Superseded in places during implementation and review.** This plan is a
+> historical execution artifact; the design spec
+> (`docs/superpowers/specs/2026-07-20-gnome-support-design.md`) is the
+> authoritative description of shipped behavior. Notable divergences:
+> `backend_for_desktop` is now infallible (`-> Backend`, case-insensitive,
+> falling back to KWin on unknown/unset desktops instead of erroring); the
+> per-backend `call_with_timeout` blocks were consolidated into a shared
+> `timeout::call_dbus_with_timeout`; query matching is token-based rather
+> than whole-substring; the workspace subtext is 1-based; and `List` records
+> are parsed per-window so one malformed entry doesn't abort the list.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add `GnomeBackend`, a second `WindowBackend` implementation talking to the "Window Calls" GNOME Shell extension over D-Bus, and make `detect_backend()` pick between it and `KWinBackend` by `XDG_CURRENT_DESKTOP`.

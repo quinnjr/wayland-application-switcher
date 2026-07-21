@@ -1,6 +1,11 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
+/// Per-call timeout for backend D-Bus calls. The README documents this as
+/// a single shared 3-second timeout, so both backends reference this one
+/// constant rather than defining their own.
+pub const DBUS_CALL_TIMEOUT: Duration = Duration::from_secs(3);
+
 #[derive(Debug)]
 pub enum TimeoutError {
     Elapsed,
@@ -106,6 +111,22 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.to_string(), "Test call failed: boom");
+    }
+
+    #[test]
+    fn dbus_worker_panic_names_the_server() {
+        let err = call_dbus_with_timeout::<()>(
+            Duration::from_millis(200),
+            "TestServer",
+            "Test call failed",
+            None,
+            || panic!("simulated worker panic"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "TestServer worker thread panicked or exited unexpectedly"
+        );
     }
 
     #[test]

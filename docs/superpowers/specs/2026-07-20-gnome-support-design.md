@@ -117,19 +117,24 @@ happens client-side in `GnomeBackend::list_windows`:
   `workspace`, plus whatever else the reply carries that's unused).
 - Empty query → keep every window (matches KWin's "empty query = all
   windows" convention, and the trait's documented contract).
-- Non-empty query → keep a window if the query is a case-insensitive
-  substring of its `title` OR its `wm_class`.
+- Non-empty query → keep a window if every whitespace-separated query
+  token is a case-insensitive substring of its `title` OR its
+  `wm_class` (tokens may match different fields). Token-based rather
+  than whole-substring so multi-word queries behave like KWin's
+  server-side matching instead of diverging on GNOME.
 - Map each surviving `GnomeWindow` to `WindowInfo`:
   - `id` ← `GnomeWindow.id`, stringified.
   - `title` ← `GnomeWindow.title`.
   - `icon` ← `String::new()` (Window Calls doesn't expose an icon;
     consistent with `icon` being unused elsewhere in `was` today).
   - `subtext` ← `"Activate running window on workspace {n}"` with the
-    0-based Mutter workspace index shown 1-based, mirroring KWin's
-    `"Activate running window on Desktop {n}"` phrasing so the picker
-    reads consistently across backends. Sticky windows (workspace -1)
-    and replies missing the field get the generic
-    `"Activate running window"`.
+    0-based Mutter workspace index shown 1-based, mirroring the shape
+    of KWin's `"Activate running window on Desktop {n}"` phrasing.
+    The noun deliberately stays "workspace" — GNOME's own term — rather
+    than KWin's "Desktop", so each backend speaks its desktop's
+    language; the numbering convention is what's kept consistent.
+    Sticky windows (workspace -1) and replies missing the field get
+    the generic `"Activate running window"`.
 
 `activate(id)` parses `id` back to whatever type `Activate()` expects
 (likely a numeric window id) and calls `Activate(id)`.
@@ -168,4 +173,6 @@ happens client-side in `GnomeBackend::list_windows`:
   session available to test against. Manual verification must happen
   on a real GNOME box (or VM) with the Window Calls extension
   installed, at a later time, the same way `KWinBackend` was
-  originally verified live here.
+  originally verified live here. Tracked in
+  [#2](https://github.com/quinnjr/wayland-application-switcher/issues/2),
+  which carries the manual verification checklist.
