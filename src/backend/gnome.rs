@@ -1,5 +1,6 @@
 use crate::backend::{WindowBackend, WindowInfo};
-use crate::timeout::{TimeoutError, run_with_timeout};
+use crate::timeout::call_dbus_with_timeout;
+use anyhow::Context;
 use std::time::Duration;
 use zbus::blocking::Connection;
 
@@ -7,6 +8,8 @@ const DEST: &str = "org.gnome.Shell";
 const PATH: &str = "/org/gnome/Shell/Extensions/Windows";
 const IFACE: &str = "org.gnome.Shell.Extensions.Windows";
 const CALL_TIMEOUT: Duration = Duration::from_secs(3);
+const INSTALL_HINT: &str = "is the \"Window Calls\" GNOME Shell extension installed and enabled? \
+     https://extensions.gnome.org/extension/4724/window-calls/";
 
 pub struct GnomeBackend {
     conn: Connection,
@@ -22,29 +25,26 @@ impl GnomeBackend {
 
 fn call_with_timeout<T: Send + 'static>(
     context: &'static str,
+    hint: Option<&'static str>,
     f: impl FnOnce() -> zbus::Result<T> + Send + 'static,
 ) -> anyhow::Result<T> {
-    match run_with_timeout(CALL_TIMEOUT, f) {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(e)) => anyhow::bail!(
-            "{context}: {e} (is the \"Window Calls\" GNOME Shell extension installed \
-             and enabled? https://extensions.gnome.org/extension/4724/window-calls/)"
-        ),
-        Err(TimeoutError::Elapsed) => anyhow::bail!("GNOME Shell is not responding"),
-        Err(TimeoutError::WorkerPanicked) => {
-            anyhow::bail!("GNOME worker thread panicked or exited unexpectedly")
-        }
-    }
+    call_dbus_with_timeout(CALL_TIMEOUT, "GNOME Shell", context, hint, f)
 }
 
 impl WindowBackend for GnomeBackend {
     fn list_windows(&self, query: &str) -> anyhow::Result<Vec<WindowInfo>> {
         let conn = self.conn.clone();
-        let reply = call_with_timeout("GNOME List call failed", move || {
+        // The install hint only makes sense here: List is the first call any
+        // command makes, so a missing extension always surfaces on this path.
+        let reply = call_with_timeout("GNOME List call failed", Some(INSTALL_HINT), move || {
             conn.call_method(Some(DEST), PATH, Some(IFACE), "List", &())
         })?;
-        let json: String = reply.body().deserialize()?;
-        let windows: Vec<GnomeWindow> = serde_json::from_str(&json)?;
+        let json: String = reply
+            .body()
+            .deserialize()
+            .context("GNOME List: unexpected D-Bus reply body from Window Calls extension")?;
+        let windows: Vec<GnomeWindow> = serde_json::from_str(&json)
+            .context("GNOME List: could not parse Window Calls JSON response")?;
         Ok(windows
             .into_iter()
             .filter(|w| matches_query(w, query))
@@ -53,15 +53,18 @@ impl WindowBackend for GnomeBackend {
     }
 
     fn activate(&self, id: &str) -> anyhow::Result<()> {
-        let winid: u32 = id
-            .parse()
-            .map_err(|_| anyhow::anyhow!("invalid GNOME window id: {id:?}"))?;
+        let winid = parse_window_id(id)?;
         let conn = self.conn.clone();
-        call_with_timeout("GNOME Activate call failed", move || {
+        call_with_timeout("GNOME Activate call failed", None, move || {
             conn.call_method(Some(DEST), PATH, Some(IFACE), "Activate", &(winid,))
         })?;
         Ok(())
     }
+}
+
+fn parse_window_id(id: &str) -> anyhow::Result<u32> {
+    id.parse()
+        .map_err(|_| anyhow::anyhow!("invalid GNOME window id: {id:?}"))
 }
 
 #[derive(serde::Deserialize)]
@@ -71,7 +74,10 @@ struct GnomeWindow {
     // passes their result through unchanged — so these can be JSON null.
     title: Option<String>,
     wm_class: Option<String>,
-    workspace: i32,
+    // Tolerate the field being absent (extension version skew) so one odd
+    // window doesn't abort the whole List parse.
+    #[serde(default)]
+    workspace: Option<i32>,
 }
 
 fn matches_query(w: &GnomeWindow, query: &str) -> bool {
@@ -87,11 +93,17 @@ fn matches_query(w: &GnomeWindow, query: &str) -> bool {
 }
 
 fn window_info_from_gnome_window(w: GnomeWindow) -> WindowInfo {
+    // Mutter workspace indices are 0-based (-1 for sticky windows); show
+    // them 1-based to match KWin's "Desktop 1" convention.
+    let subtext = match w.workspace {
+        Some(ws) if ws >= 0 => format!("Activate running window on workspace {}", ws + 1),
+        _ => "Activate running window".to_string(),
+    };
     WindowInfo {
         id: w.id.to_string(),
         title: w.title.unwrap_or_default(),
         icon: String::new(),
-        subtext: format!("Activate running window on workspace {}", w.workspace),
+        subtext,
     }
 }
 
@@ -104,7 +116,7 @@ mod tests {
             id,
             title: Some(title.to_string()),
             wm_class: Some(wm_class.to_string()),
-            workspace,
+            workspace: Some(workspace),
         }
     }
 
@@ -133,13 +145,27 @@ mod tests {
     }
 
     #[test]
-    fn maps_fields_and_synthesizes_subtext_from_workspace() {
+    fn maps_fields_and_synthesizes_one_based_workspace_subtext() {
         let w = window(42, "My Window", "myapp", 3);
         let info = window_info_from_gnome_window(w);
         assert_eq!(info.id, "42");
         assert_eq!(info.title, "My Window");
         assert_eq!(info.icon, "");
-        assert_eq!(info.subtext, "Activate running window on workspace 3");
+        assert_eq!(info.subtext, "Activate running window on workspace 4");
+    }
+
+    #[test]
+    fn sticky_window_workspace_gets_generic_subtext() {
+        let info = window_info_from_gnome_window(window(1, "Sticky", "app", -1));
+        assert_eq!(info.subtext, "Activate running window");
+    }
+
+    #[test]
+    fn missing_workspace_gets_generic_subtext() {
+        let json = r#"[{"id": 5, "title": "T", "wm_class": "c"}]"#;
+        let windows: Vec<GnomeWindow> = serde_json::from_str(json).unwrap();
+        let info = window_info_from_gnome_window(windows.into_iter().next().unwrap());
+        assert_eq!(info.subtext, "Activate running window");
     }
 
     #[test]
@@ -157,6 +183,12 @@ mod tests {
     }
 
     #[test]
+    fn missing_id_fails_to_deserialize() {
+        let json = r#"[{"title": "T", "wm_class": "c", "workspace": 0}]"#;
+        assert!(serde_json::from_str::<Vec<GnomeWindow>>(json).is_err());
+    }
+
+    #[test]
     fn null_title_and_wm_class_deserialize_and_do_not_match_queries() {
         let json = r#"[{"id": 9, "title": null, "wm_class": null, "workspace": 0}]"#;
         let windows: Vec<GnomeWindow> = serde_json::from_str(json).unwrap();
@@ -167,14 +199,41 @@ mod tests {
     }
 
     #[test]
+    fn null_title_still_matches_on_wm_class() {
+        let w = GnomeWindow {
+            id: 9,
+            title: None,
+            wm_class: Some("firefox".to_string()),
+            workspace: Some(0),
+        };
+        assert!(matches_query(&w, "Firefox"));
+    }
+
+    #[test]
     fn null_title_maps_to_empty_string() {
         let w = GnomeWindow {
             id: 9,
             title: None,
             wm_class: None,
-            workspace: 0,
+            workspace: Some(0),
         };
         let info = window_info_from_gnome_window(w);
         assert_eq!(info.title, "");
+    }
+
+    #[test]
+    fn numeric_window_id_parses() {
+        assert_eq!(parse_window_id("42").unwrap(), 42);
+    }
+
+    #[test]
+    fn non_numeric_window_id_is_rejected_with_id_in_message() {
+        let err = parse_window_id("id-1").unwrap_err();
+        assert!(err.to_string().contains("id-1"));
+    }
+
+    #[test]
+    fn negative_window_id_is_rejected() {
+        assert!(parse_window_id("-3").is_err());
     }
 }

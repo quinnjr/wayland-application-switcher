@@ -63,18 +63,19 @@ and dispatches:
 ```rust
 pub fn detect_backend() -> anyhow::Result<Box<dyn WindowBackend>> {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-    if desktop.contains("GNOME") {
-        Ok(Box::new(gnome::GnomeBackend::connect()?))
-    } else if desktop.contains("KDE") {
-        Ok(Box::new(kwin::KWinBackend::connect()?))
-    } else {
-        anyhow::bail!(
-            "unsupported desktop environment (XDG_CURRENT_DESKTOP={desktop:?}); \
-             only KDE Plasma and GNOME are supported"
-        )
+    match backend_for_desktop(&desktop) {
+        Backend::Gnome => Ok(Box::new(gnome::GnomeBackend::connect()?)),
+        Backend::Kde => Ok(Box::new(kwin::KWinBackend::connect()?)),
     }
 }
 ```
+
+`backend_for_desktop` matches `XDG_CURRENT_DESKTOP` case-insensitively
+(the variable is a colon-separated list with no guaranteed casing).
+Anything that isn't GNOME — including the variable being unset, which
+is normal for systemd units, cron, and SSH sessions — falls back to
+the KWin backend, preserving the behavior `was` had before it grew
+multiple backends.
 
 `GnomeBackend` (`src/backend/gnome.rs`) mirrors `KWinBackend`'s shape:
 
@@ -123,9 +124,12 @@ happens client-side in `GnomeBackend::list_windows`:
   - `title` ← `GnomeWindow.title`.
   - `icon` ← `String::new()` (Window Calls doesn't expose an icon;
     consistent with `icon` being unused elsewhere in `was` today).
-  - `subtext` ← `format!("Activate running window on workspace {}", GnomeWindow.workspace)`,
-    mirroring KWin's `"Activate running window on Desktop {n}"` phrasing
-    so the picker reads consistently across backends.
+  - `subtext` ← `"Activate running window on workspace {n}"` with the
+    0-based Mutter workspace index shown 1-based, mirroring KWin's
+    `"Activate running window on Desktop {n}"` phrasing so the picker
+    reads consistently across backends. Sticky windows (workspace -1)
+    and replies missing the field get the generic
+    `"Activate running window"`.
 
 `activate(id)` parses `id` back to whatever type `Activate()` expects
 (likely a numeric window id) and calls `Activate(id)`.
@@ -136,8 +140,10 @@ happens client-side in `GnomeBackend::list_windows`:
   fails; wrapped into an error naming the extension and pointing at
   `extensions.gnome.org/extension/4724` to install it (GNOME's
   equivalent of KWin's "not reachable"/"is not responding" errors).
-- Unsupported desktop (`XDG_CURRENT_DESKTOP` matches neither KDE nor
-  GNOME): clear error naming the detected value, exit 1, no panic.
+- Unrecognized or unset `XDG_CURRENT_DESKTOP`: falls back to the KWin
+  backend (see Architecture) rather than erroring, so headless-ish
+  invocation contexts keep working; a genuinely unsupported compositor
+  then surfaces as KWin's own "not reachable" error.
 - A GNOME session with an incompatible/older Window Calls API version
   producing a deserialization error: surfaces as a plain D-Bus/serde
   error via the existing `?` propagation — no special handling beyond
@@ -153,9 +159,9 @@ happens client-side in `GnomeBackend::list_windows`:
   is tested today.
 - `detect_backend()`'s `XDG_CURRENT_DESKTOP` dispatch logic is
   extracted into a small pure function (e.g.
-  `fn backend_for_desktop(desktop: &str) -> Result<Backend, String>`
+  `fn backend_for_desktop(desktop: &str) -> Backend`
   returning an enum tag rather than constructing a real backend) so
-  the KDE/GNOME/unsupported branching is unit-testable without a live
+  the KDE/GNOME/fallback branching is unit-testable without a live
   D-Bus connection.
 - `GnomeBackend`'s real D-Bus calls are **not** exercised in this
   session — this dev environment is KDE Plasma, with no GNOME/Mutter

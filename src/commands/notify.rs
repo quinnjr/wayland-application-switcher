@@ -1,5 +1,4 @@
-use crate::backend::kwin::KWinBackend;
-use crate::backend::{MatchResolution, WindowBackend, classify_matches};
+use crate::backend::{MatchResolution, WindowBackend, classify_matches, detect_backend};
 use crate::timeout::{TimeoutError, run_with_timeout};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -113,8 +112,8 @@ pub fn run_notify(
         return Ok(());
     }
 
-    let backend = KWinBackend::from_connection(conn);
-    activate_or_report(&backend, query)
+    let backend = detect_backend()?;
+    activate_or_report(backend.as_ref(), query)
 }
 
 fn activate_or_report(backend: &dyn WindowBackend, query: &str) -> anyhow::Result<()> {

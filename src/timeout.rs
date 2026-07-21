@@ -28,6 +28,30 @@ pub fn run_with_timeout<T: Send + 'static>(
     }
 }
 
+/// Wraps a blocking zbus call in `run_with_timeout` and maps every failure
+/// mode to a user-facing error. `server` names the D-Bus peer ("KWin",
+/// "GNOME Shell") for the timeout/panic messages; `hint` is appended to
+/// call errors when there's a likely remedy (e.g. a missing extension).
+pub fn call_dbus_with_timeout<T: Send + 'static>(
+    timeout: Duration,
+    server: &'static str,
+    context: &'static str,
+    hint: Option<&'static str>,
+    f: impl FnOnce() -> zbus::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    match run_with_timeout(timeout, f) {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(e)) => match hint {
+            Some(hint) => anyhow::bail!("{context}: {e} ({hint})"),
+            None => anyhow::bail!("{context}: {e}"),
+        },
+        Err(TimeoutError::Elapsed) => anyhow::bail!("{server} is not responding"),
+        Err(TimeoutError::WorkerPanicked) => {
+            anyhow::bail!("{server} worker thread panicked or exited unexpectedly")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,5 +77,50 @@ mod tests {
             panic!("simulated worker panic");
         });
         assert!(matches!(result, Err(TimeoutError::WorkerPanicked)));
+    }
+
+    #[test]
+    fn dbus_error_includes_context_and_hint() {
+        let err = call_dbus_with_timeout::<()>(
+            Duration::from_secs(1),
+            "TestServer",
+            "Test call failed",
+            Some("install the thing"),
+            || Err(zbus::Error::Failure("boom".to_string())),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Test call failed"));
+        assert!(msg.contains("boom"));
+        assert!(msg.contains("install the thing"));
+    }
+
+    #[test]
+    fn dbus_error_without_hint_omits_parenthetical() {
+        let err = call_dbus_with_timeout::<()>(
+            Duration::from_secs(1),
+            "TestServer",
+            "Test call failed",
+            None,
+            || Err(zbus::Error::Failure("boom".to_string())),
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), "Test call failed: boom");
+    }
+
+    #[test]
+    fn dbus_timeout_names_the_server() {
+        let err = call_dbus_with_timeout::<()>(
+            Duration::from_millis(20),
+            "TestServer",
+            "Test call failed",
+            None,
+            || {
+                std::thread::sleep(Duration::from_secs(10));
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), "TestServer is not responding");
     }
 }

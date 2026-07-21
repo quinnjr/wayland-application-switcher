@@ -1,5 +1,5 @@
 use crate::backend::{WindowBackend, WindowInfo};
-use crate::timeout::{TimeoutError, run_with_timeout};
+use crate::timeout::call_dbus_with_timeout;
 use std::collections::HashMap;
 use std::time::Duration;
 use zbus::blocking::Connection;
@@ -20,24 +20,13 @@ impl KWinBackend {
             conn: Connection::session()?,
         })
     }
-
-    pub fn from_connection(conn: Connection) -> Self {
-        Self { conn }
-    }
 }
 
 fn call_with_timeout<T: Send + 'static>(
     context: &'static str,
     f: impl FnOnce() -> zbus::Result<T> + Send + 'static,
 ) -> anyhow::Result<T> {
-    match run_with_timeout(CALL_TIMEOUT, f) {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(e)) => anyhow::bail!("{context}: {e}"),
-        Err(TimeoutError::Elapsed) => anyhow::bail!("KWin is not responding"),
-        Err(TimeoutError::WorkerPanicked) => {
-            anyhow::bail!("KWin worker thread panicked or exited unexpectedly")
-        }
-    }
+    call_dbus_with_timeout(CALL_TIMEOUT, "KWin", context, None, f)
 }
 
 type MatchTuple = (

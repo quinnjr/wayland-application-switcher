@@ -34,25 +34,24 @@ pub enum Backend {
     Gnome,
 }
 
-pub fn backend_for_desktop(desktop: &str) -> Result<Backend, String> {
-    if desktop.contains("GNOME") {
-        Ok(Backend::Gnome)
-    } else if desktop.contains("KDE") {
-        Ok(Backend::Kde)
+pub fn backend_for_desktop(desktop: &str) -> Backend {
+    // XDG_CURRENT_DESKTOP is a colon-separated list ("ubuntu:GNOME") with
+    // no guaranteed casing, so match a substring case-insensitively.
+    // Anything that isn't GNOME — including unset, which is normal for
+    // systemd units, cron, and SSH sessions — falls back to KWin, the
+    // behavior this tool had before it grew multiple backends.
+    if desktop.to_ascii_uppercase().contains("GNOME") {
+        Backend::Gnome
     } else {
-        Err(format!(
-            "unsupported desktop environment (XDG_CURRENT_DESKTOP={desktop:?}); \
-             only KDE Plasma and GNOME are supported"
-        ))
+        Backend::Kde
     }
 }
 
 pub fn detect_backend() -> anyhow::Result<Box<dyn WindowBackend>> {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
     match backend_for_desktop(&desktop) {
-        Ok(Backend::Kde) => Ok(Box::new(kwin::KWinBackend::connect()?)),
-        Ok(Backend::Gnome) => Ok(Box::new(gnome::GnomeBackend::connect()?)),
-        Err(msg) => anyhow::bail!(msg),
+        Backend::Kde => Ok(Box::new(kwin::KWinBackend::connect()?)),
+        Backend::Gnome => Ok(Box::new(gnome::GnomeBackend::connect()?)),
     }
 }
 
@@ -95,12 +94,12 @@ mod tests {
 
     #[test]
     fn plain_kde_selects_kde_backend() {
-        assert!(matches!(backend_for_desktop("KDE"), Ok(Backend::Kde)));
+        assert!(matches!(backend_for_desktop("KDE"), Backend::Kde));
     }
 
     #[test]
     fn plain_gnome_selects_gnome_backend() {
-        assert!(matches!(backend_for_desktop("GNOME"), Ok(Backend::Gnome)));
+        assert!(matches!(backend_for_desktop("GNOME"), Backend::Gnome));
     }
 
     #[test]
@@ -109,18 +108,24 @@ mod tests {
         // "ubuntu:GNOME" — a substring check must still catch it.
         assert!(matches!(
             backend_for_desktop("ubuntu:GNOME"),
-            Ok(Backend::Gnome)
+            Backend::Gnome
         ));
     }
 
     #[test]
-    fn unknown_desktop_is_rejected_with_a_clear_message() {
-        let err = backend_for_desktop("XFCE").unwrap_err();
-        assert!(err.contains("XFCE"));
+    fn lowercase_gnome_selects_gnome_backend() {
+        assert!(matches!(backend_for_desktop("gnome"), Backend::Gnome));
     }
 
     #[test]
-    fn empty_desktop_is_rejected() {
-        assert!(backend_for_desktop("").is_err());
+    fn unknown_desktop_falls_back_to_kde() {
+        assert!(matches!(backend_for_desktop("XFCE"), Backend::Kde));
+    }
+
+    #[test]
+    fn empty_desktop_falls_back_to_kde() {
+        // Unset XDG_CURRENT_DESKTOP (systemd units, cron, ssh) must not
+        // break; KWin is the historical default.
+        assert!(matches!(backend_for_desktop(""), Backend::Kde));
     }
 }
