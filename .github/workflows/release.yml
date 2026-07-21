@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
 
+# Needed by softprops/action-gh-release to create the GitHub Release and
+# upload assets; the default GITHUB_TOKEN is read-only on this repo.
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
 
