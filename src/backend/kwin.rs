@@ -1,14 +1,12 @@
 use crate::backend::{WindowBackend, WindowInfo};
-use crate::timeout::{TimeoutError, run_with_timeout};
+use crate::timeout::{DBUS_CALL_TIMEOUT, call_dbus_with_timeout};
 use std::collections::HashMap;
-use std::time::Duration;
 use zbus::blocking::Connection;
 use zbus::zvariant::OwnedValue;
 
 const DEST: &str = "org.kde.KWin";
 const PATH: &str = "/WindowsRunner";
 const IFACE: &str = "org.kde.krunner1";
-const CALL_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub struct KWinBackend {
     conn: Connection,
@@ -20,24 +18,14 @@ impl KWinBackend {
             conn: Connection::session()?,
         })
     }
-
-    pub fn from_connection(conn: Connection) -> Self {
-        Self { conn }
-    }
 }
 
 fn call_with_timeout<T: Send + 'static>(
     context: &'static str,
+    hint: Option<&'static str>,
     f: impl FnOnce() -> zbus::Result<T> + Send + 'static,
 ) -> anyhow::Result<T> {
-    match run_with_timeout(CALL_TIMEOUT, f) {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(e)) => anyhow::bail!("{context}: {e}"),
-        Err(TimeoutError::Elapsed) => anyhow::bail!("KWin is not responding"),
-        Err(TimeoutError::WorkerPanicked) => {
-            anyhow::bail!("KWin worker thread panicked or exited unexpectedly")
-        }
-    }
+    call_dbus_with_timeout(DBUS_CALL_TIMEOUT, "KWin", context, hint, f)
 }
 
 type MatchTuple = (
@@ -53,7 +41,7 @@ impl WindowBackend for KWinBackend {
     fn list_windows(&self, query: &str) -> anyhow::Result<Vec<WindowInfo>> {
         let conn = self.conn.clone();
         let query = query.to_string();
-        let reply = call_with_timeout("KWin Match call failed", move || {
+        let reply = call_with_timeout("KWin Match call failed", None, move || {
             conn.call_method(Some(DEST), PATH, Some(IFACE), "Match", &(query,))
         })?;
         let matches: Vec<MatchTuple> = reply.body().deserialize()?;
@@ -63,7 +51,7 @@ impl WindowBackend for KWinBackend {
     fn activate(&self, id: &str) -> anyhow::Result<()> {
         let conn = self.conn.clone();
         let id = id.to_string();
-        call_with_timeout("KWin Run call failed", move || {
+        call_with_timeout("KWin Run call failed", None, move || {
             conn.call_method(Some(DEST), PATH, Some(IFACE), "Run", &(id, ""))
         })?;
         Ok(())

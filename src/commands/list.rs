@@ -5,9 +5,14 @@ pub fn run_list(query: Option<&str>) -> anyhow::Result<()> {
     let backend = detect_backend()?;
     let windows = list_windows(backend.as_ref(), query)?;
     for w in &windows {
-        println!("{}\t{}\t{}", w.id, w.title, w.subtext);
+        println!("{}", format_row(w));
     }
     Ok(())
+}
+
+// README documents the output contract as `id<TAB>title<TAB>subtext`.
+fn format_row(w: &crate::backend::WindowInfo) -> String {
+    format!("{}\t{}\t{}", w.id, w.title, w.subtext)
 }
 
 fn list_windows(
@@ -64,5 +69,19 @@ mod tests {
         };
         let windows = list_windows(&backend, Some("konsole")).unwrap();
         assert_eq!(windows.len(), 1);
+    }
+
+    #[test]
+    fn rows_are_tab_separated_id_title_subtext() {
+        let w = WindowInfo {
+            id: "42".to_string(),
+            title: "My Window".to_string(),
+            icon: "unused".to_string(),
+            subtext: "Activate running window on Desktop 1".to_string(),
+        };
+        assert_eq!(
+            format_row(&w),
+            "42\tMy Window\tActivate running window on Desktop 1"
+        );
     }
 }
