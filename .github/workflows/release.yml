@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  package:
+    name: Build .deb and .rpm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-deb and cargo-generate-rpm
+        run: cargo install cargo-deb cargo-generate-rpm
+
+      - name: Run tests
+        run: cargo test --verbose
+
+      - name: Build release binary
+        run: cargo build --release --verbose
+
+      - name: Build .deb package
+        run: cargo deb --no-build
+
+      - name: Build .rpm package
+        run: cargo generate-rpm
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          cp target/debian/*.deb dist/
+          cp target/generate-rpm/*.rpm dist/
+          ls -la dist/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: dist/*
+
+      - name: Attach packages to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
